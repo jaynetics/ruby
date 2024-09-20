@@ -59,14 +59,16 @@ module RubyVM::RJIT
     # @param iseq `RubyVM::RJIT::CPointer::Struct_rb_iseq_t`
     # @param cfp `RubyVM::RJIT::CPointer::Struct_rb_control_frame_t`
     def compile(iseq, cfp)
+      return unless supported_platform?
       pc = cfp.pc.to_i
       jit = JITState.new(iseq:, cfp:)
       asm = Assembler.new
       compile_prologue(asm, iseq, pc)
       compile_block(asm, jit:, pc:)
-      iseq.body.jit_func = @cb.write(asm)
+      iseq.body.jit_entry = @cb.write(asm)
     rescue Exception => e
-      $stderr.puts e.full_message
+      STDERR.puts "#{e.class}: #{e.message}"
+      STDERR.puts e.backtrace
       exit 1
     end
 
@@ -108,7 +110,7 @@ module RubyVM::RJIT
 
       return block.start_addr
     rescue Exception => e
-      $stderr.puts e.full_message
+      STDERR.puts e.full_message
       exit 1
     end
 
@@ -163,7 +165,7 @@ module RubyVM::RJIT
 
       return target.address
     rescue Exception => e
-      $stderr.puts e.full_message
+      STDERR.puts e.full_message
       exit 1
     end
 
@@ -176,8 +178,8 @@ module RubyVM::RJIT
 
       # If they were the ISEQ's first blocks, re-compile RJIT entry as well
       if iseq.body.iseq_encoded.to_i == pc
-        iseq.body.jit_func = 0
-        iseq.body.total_calls = 0
+        iseq.body.jit_entry = 0
+        iseq.body.jit_entry_calls = 0
       end
     end
 
@@ -503,6 +505,13 @@ module RubyVM::RJIT
     def assert(cond)
       unless cond
         raise "'#{cond.inspect}' was not true"
+      end
+    end
+
+    def supported_platform?
+      return @supported_platform if defined?(@supported_platform)
+      @supported_platform = RUBY_PLATFORM.match?(/x86_64/).tap do |supported|
+        warn "warning: RJIT does not support #{RUBY_PLATFORM} yet" unless supported
       end
     end
   end

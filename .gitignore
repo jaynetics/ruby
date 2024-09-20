@@ -138,6 +138,7 @@ lcov*.info
 /test.rb
 /test-coverage.dat
 /tmp
+/vcpkg_installed
 /transdb.h
 /uncommon.mk
 /verconf.h
@@ -166,6 +167,7 @@ lcov*.info
 
 # /coroutine/
 !/coroutine/**/*.s
+!/coroutine/**/*.S
 
 # /enc/trans/
 /enc/trans/*.c
@@ -205,8 +207,10 @@ lcov*.info
 
 # /ext/ripper/
 /ext/ripper/eventids1.c
+/ext/ripper/eventids1.h
 /ext/ripper/.eventids2-check
 /ext/ripper/eventids2table.c
+/ext/ripper/ripper_init.c
 /ext/ripper/ripper.*
 /ext/ripper/ids1
 /ext/ripper/ids2
@@ -228,8 +232,9 @@ lcov*.info
 # /misc/
 /misc/**/__pycache__
 
-# /spec/bundler
+# for `make test-bundler`
 /.rspec_status
+/tool/bundler/*.lock
 
 # /tool/
 /tool/config.guess
@@ -251,3 +256,28 @@ lcov*.info
 
 # /wasm/
 /wasm/tests/*.wasm
+
+# prism
+/lib/prism/compiler.rb
+/lib/prism/dispatcher.rb
+/lib/prism/dot_visitor.rb
+/lib/prism/dsl.rb
+/lib/prism/inspect_visitor.rb
+/lib/prism/mutation_compiler.rb
+/lib/prism/node.rb
+/lib/prism/reflection.rb
+/lib/prism/serialize.rb
+/lib/prism/visitor.rb
+/prism/api_node.c
+/prism/ast.h
+/prism/diagnostic.c
+/prism/diagnostic.h
+/prism/node.c
+/prism/prettyprint.c
+/prism/serialize.c
+/prism/token_type.c
+
+# tool/update-NEWS-gemlist.rb
+/bundled_gems.json
+/default_gems.json
+/gems/default_gems

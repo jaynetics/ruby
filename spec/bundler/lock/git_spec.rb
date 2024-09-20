@@ -5,7 +5,7 @@ RSpec.describe "bundle lock with git gems" do
     build_git "foo"
 
     install_gemfile <<-G
-      source "#{file_uri_for(gem_repo1)}"
+      source "https://gem.repo1"
       gem 'foo', :git => "#{lib_path("foo-1.0")}"
     G
   end
@@ -24,11 +24,11 @@ RSpec.describe "bundle lock with git gems" do
 
   it "prints a proper error when changing a locked Gemfile to point to a bad branch" do
     gemfile <<-G
-      source "#{file_uri_for(gem_repo1)}"
+      source "https://gem.repo1"
       gem 'foo', :git => "#{lib_path("foo-1.0")}", :branch => "bad"
     G
 
-    bundle "lock --update foo", :raise_on_error => false
+    bundle "lock --update foo", env: { "LANG" => "en" }, raise_on_error: false
 
     expect(err).to include("Revision bad does not exist in the repository")
   end
@@ -42,7 +42,7 @@ RSpec.describe "bundle lock with git gems" do
           foo (1.0)
 
       GEM
-        remote: #{file_uri_for(gem_repo1)}/
+        remote: https://gem.repo1/
         specs:
 
       PLATFORMS
@@ -55,7 +55,7 @@ RSpec.describe "bundle lock with git gems" do
          #{Bundler::VERSION}
     L
 
-    bundle "install", :raise_on_error => false
+    bundle "install", raise_on_error: false
 
     expect(err).to include("Revision #{"a" * 40} does not exist in the repository")
   end
@@ -75,7 +75,7 @@ RSpec.describe "bundle lock with git gems" do
   it "properly clones a git source locked to an out of date ref" do
     update_git "foo"
 
-    bundle :install, :env => { "BUNDLE_PATH" => "foo" }
+    bundle :install, env: { "BUNDLE_PATH" => "foo" }
     expect(err).to be_empty
   end
 
@@ -87,7 +87,7 @@ RSpec.describe "bundle lock with git gems" do
     git "branch -D foo ", lib_path("foo-1.0")
 
     gemfile <<-G
-      source "#{file_uri_for(gem_repo1)}"
+      source "https://gem.repo1"
       gem 'foo', :git => "#{lib_path("foo-1.0")}"
     G
 
@@ -99,7 +99,7 @@ RSpec.describe "bundle lock with git gems" do
           foo (1.0)
 
       GEM
-        remote: #{file_uri_for(gem_repo1)}/
+        remote: https://gem.repo1/
         specs:
 
       PLATFORMS
@@ -123,7 +123,7 @@ RSpec.describe "bundle lock with git gems" do
     annotated_tag = git("rev-parse v1.0", lib_path("foo-1.0"))
 
     gemfile <<-G
-      source "#{file_uri_for(gem_repo1)}"
+      source "https://gem.repo1"
       gem 'foo', :git => "#{lib_path("foo-1.0")}"
     G
 
@@ -135,7 +135,7 @@ RSpec.describe "bundle lock with git gems" do
           foo (1.0)
 
       GEM
-        remote: #{file_uri_for(gem_repo1)}/
+        remote: https://gem.repo1/
         specs:
 
       PLATFORMS

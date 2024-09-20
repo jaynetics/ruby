@@ -6,12 +6,27 @@ require 'rubygems/package'
 # unpack bundled gem files.
 
 module BundledGem
+  DEFAULT_GEMS_DEPENDENCIES = [
+    "net-protocol", # net-ftp
+    "time", # net-ftp
+    "singleton", # prime
+    "ipaddr", # rinda
+    "forwardable", # prime, rinda
+    "strscan" # rexml
+  ]
+
   module_function
 
   def unpack(file, *rest)
     pkg = Gem::Package.new(file)
     prepare_test(pkg.spec, *rest) {|dir| pkg.extract_files(dir)}
     puts "Unpacked #{file}"
+  rescue Gem::Package::FormatError, Errno::ENOENT
+    puts "Try with hash version of bundled gems instead of #{file}. We don't use this gem with release version of Ruby."
+    if file =~ /^gems\/(\w+)-/
+      file = Dir.glob("gems/#{$1}-*.gem").first
+    end
+    retry
   end
 
   def build(gemspec, version, outdir = ".", validation: true)
@@ -20,9 +35,6 @@ module BundledGem
     Dir.chdir(gemdir) do
       spec = Gem::Specification.load(gemfile)
       abort "Failed to load #{gemspec}" unless spec
-      unless spec.version == Gem::Version.new(version)
-        abort "Unexpected versions between bundled_gems:#{version} and gemspec:#{spec.version}"
-      end
       output = File.join(outdir, spec.file_name)
       FileUtils.rm_rf(output)
       package = Gem::Package.new(output)
@@ -52,6 +64,9 @@ module BundledGem
     gem_dir = File.join(dir, "gems", target)
     yield gem_dir
     spec_dir = spec.extensions.empty? ? "specifications" : File.join("gems", target)
+    if spec.extensions.empty?
+      spec.dependencies.reject! {|dep| DEFAULT_GEMS_DEPENDENCIES.include?(dep.name)}
+    end
     File.binwrite(File.join(dir, spec_dir, "#{target}.gemspec"), spec.to_ruby)
     unless spec.extensions.empty?
       spec.dependencies.clear
@@ -76,7 +91,10 @@ module BundledGem
     Dir.chdir(gemdir) do
       spec = Gem::Specification.new do |s|
         s.name = gemfile.chomp(".gemspec")
-        s.version = File.read("lib/#{s.name}.rb")[/VERSION = "(.+?)"/, 1]
+        s.version =
+          File.read("lib/#{s.name}.rb")[/VERSION = "(.+?)"/, 1] ||
+          begin File.read("lib/#{s.name}/version.rb")[/VERSION = "(.+?)"/, 1]; rescue; nil; end ||
+          raise("cannot find the version of #{ s.name } gem")
         s.authors = ["DUMMY"]
         s.email = ["dummy@ruby-lang.org"]
         s.files = Dir.glob("{lib,ext}/**/*").select {|f| File.file?(f)}

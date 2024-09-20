@@ -141,12 +141,10 @@ class BindingGenerator
     # Define variables
     @values.each do |type, values|
       values.each do |value|
-        println "  def C.#{value}"
-        println "    Primitive.cexpr! %q{ #{type}2NUM(#{value}) }"
-        println "  end"
-        println
+        println "  def C.#{value} = Primitive.cexpr!(%q{ #{type}2NUM(#{value}) })"
       end
     end
+    println
 
     # Define function pointers
     @funcs.each do |func|
@@ -182,8 +180,12 @@ class BindingGenerator
       unless generate_node(nodes_index[type])&.start_with?('CType::Immediate')
         raise "Non-immediate type is given to dynamic_types: #{type}"
       end
+      # Only one Primitive.cexpr! is allowed for each line: https://github.com/ruby/ruby/pull/9612
       println "  def C.#{type}"
-      println "    @#{type} ||= CType::Immediate.find(Primitive.cexpr!(\"SIZEOF(#{type})\"), Primitive.cexpr!(\"SIGNED_TYPE_P(#{type})\"))"
+      println "    @#{type} ||= CType::Immediate.find("
+      println "      Primitive.cexpr!(\"SIZEOF(#{type})\"),"
+      println "      Primitive.cexpr!(\"SIGNED_TYPE_P(#{type})\"),"
+      println "    )"
       println "  end"
       println
     end
@@ -244,7 +246,6 @@ class BindingGenerator
             to_ruby = @ruby_fields.fetch(node.spelling, []).include?(field)
             if child.bitwidth > 0
               if bit_fields_end <= i # give up offsetof calculation for non-leading bit fields
-                binding.irb
                 raise "non-leading bit fields are not supported. consider including '#{field}' in skip_fields."
               end
               offsetof = node.offsetof.fetch(field)
@@ -297,7 +298,7 @@ class BindingGenerator
   # @param type [String]
   def generate_type(type)
     if type.match?(/\[\d+\]\z/)
-      return "CType::Pointer.new { #{generate_type(type.sub!(/\[\d+\]\z/, ''))} }"
+      return "CType::Array.new { #{generate_type(type.sub!(/\[\d+\]\z/, ''))} }"
     end
     type = type.delete_suffix('const')
     if type.end_with?('*')
@@ -397,7 +398,6 @@ generator = BindingGenerator.new(
       BOP_OR
       BOP_PLUS
       BUILTIN_ATTR_LEAF
-      BUILTIN_ATTR_NO_GC
       HASH_REDEFINED_OP_FLAG
       INTEGER_REDEFINED_OP_FLAG
       INVALID_SHAPE_ID
@@ -423,7 +423,6 @@ generator = BindingGenerator.new(
       RUBY_FIXNUM_FLAG
       RUBY_FLONUM_FLAG
       RUBY_FLONUM_MASK
-      RUBY_FL_SINGLETON
       RUBY_IMMEDIATE_MASK
       RUBY_SPECIAL_SHIFT
       RUBY_SYMBOL_FLAG
@@ -436,11 +435,9 @@ generator = BindingGenerator.new(
       RUBY_T_STRING
       RUBY_T_SYMBOL
       RUBY_T_OBJECT
-      SHAPE_CAPACITY_CHANGE
       SHAPE_FLAG_SHIFT
       SHAPE_FROZEN
       SHAPE_ID_NUM_BITS
-      SHAPE_INITIAL_CAPACITY
       SHAPE_IVAR
       SHAPE_MASK
       SHAPE_ROOT
@@ -450,6 +447,7 @@ generator = BindingGenerator.new(
       VM_CALL_ARGS_BLOCKARG
       VM_CALL_ARGS_SPLAT
       VM_CALL_FCALL
+      VM_CALL_FORWARDING
       VM_CALL_KWARG
       VM_CALL_KW_SPLAT
       VM_CALL_KW_SPLAT_MUT
@@ -504,6 +502,7 @@ generator = BindingGenerator.new(
       rb_cTrueClass
       rb_rjit_global_events
       rb_mRubyVMFrozenCore
+      rb_vm_insns_count
       idRespond_to_missing
     ],
   },
@@ -526,6 +525,7 @@ generator = BindingGenerator.new(
     rb_hash_bulk_insert
     rb_hash_new
     rb_hash_new_with_size
+    rb_hash_resurrect
     rb_ivar_get
     rb_obj_as_string_result
     rb_obj_is_kind_of
@@ -539,6 +539,9 @@ generator = BindingGenerator.new(
     rb_vm_getclassvariable
     rb_vm_ic_hit_p
     rb_vm_opt_newarray_min
+    rb_vm_opt_newarray_max
+    rb_vm_opt_newarray_hash
+    rb_vm_opt_newarray_pack
     rb_vm_setinstancevariable
     rb_vm_splat_array
     rjit_full_cfunc_return
@@ -600,6 +603,7 @@ generator = BindingGenerator.new(
     rb_callcache
     rb_callinfo
     rb_captured_block
+    rb_cfunc_t
     rb_control_frame_t
     rb_cref_t
     rb_execution_context_struct
@@ -635,7 +639,7 @@ generator = BindingGenerator.new(
   skip_fields: {
     'rb_execution_context_struct.machine': %w[regs], # differs between macOS and Linux
     rb_execution_context_struct: %w[method_missing_reason], # non-leading bit fields not supported
-    rb_iseq_constant_body: %w[yjit_payload], # conditionally defined
+    rb_iseq_constant_body: %w[jit_exception jit_exception_calls yjit_payload yjit_calls_at_interv], # conditionally defined
     rb_thread_struct: %w[status has_dedicated_nt to_kill abort_on_exception report_on_exception pending_interrupt_queue_checked],
     :'' => %w[is_from_method is_lambda is_isolated], # rb_proc_t
   },

@@ -11,6 +11,7 @@ module Bundler
 
       def initialize(options)
         @options = options
+        @checksum_store = Checksum::Store.new
         @glob = options["glob"] || DEFAULT_GLOB
 
         @allow_cached = false
@@ -19,7 +20,7 @@ module Bundler
         # Stringify options that could be set as symbols
         %w[ref branch tag revision].each {|k| options[k] = options[k].to_s if options[k] }
 
-        @uri        = URINormalizer.normalize_suffix(options["uri"] || "", :trailing_slash => false)
+        @uri        = URINormalizer.normalize_suffix(options["uri"] || "", trailing_slash: false)
         @safe_uri   = URICredentialsFilter.credential_filtered_uri(@uri)
         @branch     = options["branch"]
         @ref        = options["ref"] || options["branch"] || options["tag"]
@@ -29,6 +30,20 @@ module Bundler
 
         @copied     = false
         @local      = false
+      end
+
+      def remote!
+        return if @allow_remote
+
+        @local_specs = nil
+        @allow_remote = true
+      end
+
+      def cached!
+        return if @allow_cached
+
+        @local_specs = nil
+        @allow_cached = true
       end
 
       def self.from_lock(options)
@@ -46,41 +61,53 @@ module Bundler
         out << "  specs:\n"
       end
 
+      def to_gemfile
+        specifiers = %w[ref branch tag submodules glob].map do |opt|
+          "#{opt}: #{options[opt]}" if options[opt]
+        end
+
+        uri_with_specifiers(specifiers)
+      end
+
       def hash
-        [self.class, uri, ref, branch, name, version, glob, submodules].hash
+        [self.class, uri, ref, branch, name, glob, submodules].hash
       end
 
       def eql?(other)
         other.is_a?(Git) && uri == other.uri && ref == other.ref &&
           branch == other.branch && name == other.name &&
-          version == other.version && glob == other.glob &&
+          glob == other.glob &&
           submodules == other.submodules
       end
 
       alias_method :==, :eql?
 
+      def include?(other)
+        other.is_a?(Git) && uri == other.uri &&
+          name == other.name &&
+          glob == other.glob &&
+          submodules == other.submodules
+      end
+
       def to_s
         begin
-          at = if local?
-            path
-          elsif user_ref = options["ref"]
-            if /\A[a-z0-9]{4,}\z/i.match?(ref)
-              shortref_for_display(user_ref)
-            else
-              user_ref
-            end
-          elsif ref
-            ref
-          else
-            current_branch
-          end
+          at = humanized_ref || current_branch
 
           rev = "at #{at}@#{shortref_for_display(revision)}"
         rescue GitError
           ""
         end
 
-        specifiers = [rev, glob_for_display].compact
+        uri_with_specifiers([rev, glob_for_display])
+      end
+
+      def identifier
+        uri_with_specifiers([humanized_ref, cached_revision, glob_for_display])
+      end
+
+      def uri_with_specifiers(specifiers)
+        specifiers.compact!
+
         suffix =
           if specifiers.any?
             " (#{specifiers.join(", ")})"
@@ -137,7 +164,8 @@ module Bundler
             "does not exist. Run `bundle config unset local.#{override_for(original_path)}` to remove the local override"
         end
 
-        set_local!(path)
+        @local = true
+        set_paths!(path)
 
         # Create a new git proxy without the cached revision
         # so the Gemfile.lock always picks up the new revision.
@@ -160,13 +188,13 @@ module Bundler
       end
 
       def specs(*)
-        set_local!(app_cache_path) if has_app_cache? && !local?
+        set_cache_path!(app_cache_path) if use_app_cache?
 
         if requires_checkout? && !@copied
+          FileUtils.rm_rf(app_cache_path) if use_app_cache? && git_proxy.not_a_bare_repository?
+
           fetch
-          git_proxy.copy_to(install_path, submodules)
-          serialize_gemspecs_in(install_path)
-          @copied = true
+          checkout
         end
 
         local_specs
@@ -179,13 +207,10 @@ module Bundler
         print_using_message "Using #{version_message(spec, options[:previous_spec])} from #{self}"
 
         if (requires_checkout? && !@copied) || force
-          Bundler.ui.debug "  * Checking out revision: #{ref}"
-          git_proxy.copy_to(install_path, submodules)
-          serialize_gemspecs_in(install_path)
-          @copied = true
+          checkout
         end
 
-        generate_bin_options = { :disable_extensions => !Bundler.rubygems.spec_missing_extensions?(spec), :build_args => options[:build_args] }
+        generate_bin_options = { disable_extensions: !Bundler.rubygems.spec_missing_extensions?(spec), build_args: options[:build_args] }
         generate_bin(spec, generate_bin_options)
 
         requires_checkout? ? spec.post_install_message : nil
@@ -194,12 +219,14 @@ module Bundler
       def cache(spec, custom_path = nil)
         app_cache_path = app_cache_path(custom_path)
         return unless Bundler.feature_flag.cache_all?
-        return if path == app_cache_path
+        return if install_path == app_cache_path
+        return if cache_path == app_cache_path
         cached!
         FileUtils.rm_rf(app_cache_path)
         git_proxy.checkout if requires_checkout?
-        git_proxy.copy_to(app_cache_path, @submodules)
-        serialize_gemspecs_in(app_cache_path)
+        FileUtils.cp_r("#{cache_path}/.", app_cache_path)
+        FileUtils.touch(app_cache_path.join(".bundlecache"))
+        FileUtils.rm_rf(Dir.glob(app_cache_path.join("hooks/*.sample")))
       end
 
       def load_spec_files
@@ -243,6 +270,27 @@ module Bundler
 
       private
 
+      def checkout
+        Bundler.ui.debug "  * Checking out revision: #{ref}"
+        git_proxy.copy_to(install_path, submodules)
+        serialize_gemspecs_in(install_path)
+        @copied = true
+      end
+
+      def humanized_ref
+        if local?
+          path
+        elsif user_ref = options["ref"]
+          if /\A[a-z0-9]{4,}\z/i.match?(ref)
+            shortref_for_display(user_ref)
+          else
+            user_ref
+          end
+        elsif ref
+          ref
+        end
+      end
+
       def serialize_gemspecs_in(destination)
         destination = destination.expand_path(Bundler.root) if destination.relative?
         Dir["#{destination}/#{@glob}"].each do |spec_path|
@@ -257,14 +305,27 @@ module Bundler
         end
       end
 
-      def set_local!(path)
-        @local       = true
-        @local_specs = @git_proxy = nil
-        @cache_path  = @install_path = path
+      def set_paths!(path)
+        set_cache_path!(path)
+        set_install_path!(path)
+      end
+
+      def set_cache_path!(path)
+        @git_proxy = nil
+        @cache_path = path
+      end
+
+      def set_install_path!(path)
+        @local_specs = nil
+        @install_path = path
       end
 
       def has_app_cache?
         cached_revision && super
+      end
+
+      def use_app_cache?
+        has_app_cache? && !local?
       end
 
       def requires_checkout?
@@ -299,7 +360,7 @@ module Bundler
         if %r{^\w+://(\w+@)?}.match?(uri)
           # Downcase the domain component of the URI
           # and strip off a trailing slash, if one is present
-          input = Bundler::URI.parse(uri).normalize.to_s.sub(%r{/$}, "")
+          input = Gem::URI.parse(uri).normalize.to_s.sub(%r{/$}, "")
         else
           # If there is no URI scheme, assume it is an ssh/git URI
           input = uri
@@ -332,9 +393,12 @@ module Bundler
       def validate_spec(_spec); end
 
       def load_gemspec(file)
-        stub = Gem::StubSpecification.gemspec_stub(file, install_path.parent, install_path.parent)
-        stub.full_gem_path = Pathname.new(file).dirname.expand_path(root).to_s.tap {|x| x.untaint if RUBY_VERSION < "2.7" }
-        StubSpecification.from_stub(stub)
+        dirname = Pathname.new(file).dirname
+        SharedHelpers.chdir(dirname.to_s) do
+          stub = Gem::StubSpecification.gemspec_stub(file, install_path.parent, install_path.parent)
+          stub.full_gem_path = dirname.expand_path(root).to_s
+          StubSpecification.from_stub(stub)
+        end
       end
 
       def git_scope

@@ -60,6 +60,7 @@ class Gem::CommandManager
     :push,
     :query,
     :rdoc,
+    :rebuild,
     :search,
     :server,
     :signin,
@@ -106,7 +107,7 @@ class Gem::CommandManager
   # Register all the subcommands supported by the gem command.
 
   def initialize
-    require "timeout"
+    require_relative "vendored_timeout"
     @commands = {}
 
     BUILTIN_COMMANDS.each do |name|
@@ -149,7 +150,7 @@ class Gem::CommandManager
 
   def run(args, build_args=nil)
     process_args(args, build_args)
-  rescue StandardError, Timeout::Error => ex
+  rescue StandardError, Gem::Timeout::Error => ex
     if ex.respond_to?(:detailed_message)
       msg = ex.detailed_message(highlight: false).sub(/\A(.*?)(?: \(.+?\))/) { $1 }
     else
@@ -249,6 +250,7 @@ class Gem::CommandManager
   def invoke_command(args, build_args)
     cmd_name = args.shift.downcase
     cmd = find_command cmd_name
+    terminate_interaction 1 unless cmd
     cmd.deprecation_warning if cmd.deprecated?
     cmd.invoke_with_build_args args, build_args
   end

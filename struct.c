@@ -18,7 +18,6 @@
 #include "internal/proc.h"
 #include "internal/struct.h"
 #include "internal/symbol.h"
-#include "transient_heap.h"
 #include "vm_core.h"
 #include "builtin.h"
 
@@ -137,7 +136,7 @@ struct_set_members(VALUE klass, VALUE /* frozen hidden array */ members)
                 j = struct_member_pos_probe(j, mask);
             }
         }
-        OBJ_FREEZE_RAW(back);
+        OBJ_FREEZE(back);
     }
     rb_ivar_set(klass, id_members, members);
     rb_ivar_set(klass, id_back_members, back);
@@ -237,7 +236,7 @@ rb_struct_getmember(VALUE obj, ID id)
     if (i != -1) {
         return RSTRUCT_GET(obj, i);
     }
-    rb_name_err_raise("`%1$s' is not a struct member", obj, ID2SYM(id));
+    rb_name_err_raise("'%1$s' is not a struct member", obj, ID2SYM(id));
 
     UNREACHABLE_RETURN(Qnil);
 }
@@ -274,7 +273,7 @@ new_struct(VALUE name, VALUE super)
         rb_warn("redefining constant %"PRIsVALUE"::%"PRIsVALUE, super, name);
         rb_mod_remove_const(super, ID2SYM(id));
     }
-    return rb_define_class_id_under(super, id, super);
+    return rb_define_class_id_under_no_pin(super, id, super);
 }
 
 NORETURN(static void invalid_struct_pos(VALUE s, VALUE idx));
@@ -423,7 +422,7 @@ struct_make_members_list(va_list ar)
     }
     ary = rb_hash_keys(list);
     RBASIC_CLEAR_CLASS(ary);
-    OBJ_FREEZE_RAW(ary);
+    OBJ_FREEZE(ary);
     return ary;
 }
 
@@ -492,8 +491,13 @@ rb_struct_define(const char *name, ...)
     ary = struct_make_members_list(ar);
     va_end(ar);
 
-    if (!name) st = anonymous_struct(rb_cStruct);
-    else st = new_struct(rb_str_new2(name), rb_cStruct);
+    if (!name) {
+        st = anonymous_struct(rb_cStruct);
+    }
+    else {
+        st = new_struct(rb_str_new2(name), rb_cStruct);
+        rb_vm_register_global_object(st);
+    }
     return setup_struct(st, ary);
 }
 
@@ -507,7 +511,7 @@ rb_struct_define_under(VALUE outer, const char *name, ...)
     ary = struct_make_members_list(ar);
     va_end(ar);
 
-    return setup_struct(rb_define_class_under(outer, name, rb_cStruct), ary);
+    return setup_struct(rb_define_class_id_under(outer, rb_intern(name), rb_cStruct), ary);
 }
 
 /*
@@ -562,7 +566,7 @@ rb_struct_define_under(VALUE outer, const char *name, ...)
  *
  *  <b>Member Names</b>
  *
- *  \Symbol arguments +member_names+
+ *  Symbol arguments +member_names+
  *  determines the members of the new subclass:
  *
  *    Struct.new(:foo, :bar).members        # => [:foo, :bar]
@@ -637,17 +641,14 @@ rb_struct_define_under(VALUE outer, const char *name, ...)
 static VALUE
 rb_struct_s_def(int argc, VALUE *argv, VALUE klass)
 {
-    VALUE name, rest, keyword_init = Qnil;
+    VALUE name = Qnil, rest, keyword_init = Qnil;
     long i;
     VALUE st;
     VALUE opt;
 
-    argc = rb_scan_args(argc, argv, "1*:", NULL, NULL, &opt);
-    name = argv[0];
-    if (SYMBOL_P(name)) {
-        name = Qnil;
-    }
-    else {
+    argc = rb_scan_args(argc, argv, "0*:", NULL, &opt);
+    if (argc >= 1 && !SYMBOL_P(argv[0])) {
+        name = argv[0];
         --argc;
         ++argv;
     }
@@ -681,7 +682,7 @@ rb_struct_s_def(int argc, VALUE *argv, VALUE klass)
     }
     rest = rb_hash_keys(rest);
     RBASIC_CLEAR_CLASS(rest);
-    OBJ_FREEZE_RAW(rest);
+    OBJ_FREEZE(rest);
     if (NIL_P(name)) {
         st = anonymous_struct(klass);
     }
@@ -793,7 +794,7 @@ VALUE
 rb_struct_initialize(VALUE self, VALUE values)
 {
     rb_struct_initialize_m(RARRAY_LENINT(values), RARRAY_CONST_PTR(values), self);
-    if (rb_obj_is_kind_of(self, rb_cData)) OBJ_FREEZE_RAW(self);
+    if (rb_obj_is_kind_of(self, rb_cData)) OBJ_FREEZE(self);
     RB_GC_GUARD(values);
     return Qnil;
 }
@@ -801,60 +802,34 @@ rb_struct_initialize(VALUE self, VALUE values)
 static VALUE *
 struct_heap_alloc(VALUE st, size_t len)
 {
-    VALUE *ptr = rb_transient_heap_alloc((VALUE)st, sizeof(VALUE) * len);
-
-    if (ptr) {
-        RSTRUCT_TRANSIENT_SET(st);
-        return ptr;
-    }
-    else {
-        RSTRUCT_TRANSIENT_UNSET(st);
-        return ALLOC_N(VALUE, len);
-    }
+    return ALLOC_N(VALUE, len);
 }
-
-#if USE_TRANSIENT_HEAP
-void
-rb_struct_transient_heap_evacuate(VALUE obj, int promote)
-{
-    if (RSTRUCT_TRANSIENT_P(obj)) {
-        const VALUE *old_ptr = rb_struct_const_heap_ptr(obj);
-        VALUE *new_ptr;
-        long len = RSTRUCT_LEN(obj);
-
-        if (promote) {
-            new_ptr = ALLOC_N(VALUE, len);
-            FL_UNSET_RAW(obj, RSTRUCT_TRANSIENT_FLAG);
-        }
-        else {
-            new_ptr = struct_heap_alloc(obj, len);
-        }
-        MEMCPY(new_ptr, old_ptr, VALUE, len);
-        RSTRUCT(obj)->as.heap.ptr = new_ptr;
-    }
-}
-#endif
 
 static VALUE
 struct_alloc(VALUE klass)
 {
-    long n;
-    NEWOBJ_OF(st, struct RStruct, klass, T_STRUCT | (RGENGC_WB_PROTECTED_STRUCT ? FL_WB_PROTECTED : 0), sizeof(struct RStruct), 0);
+    long n = num_members(klass);
+    size_t embedded_size = offsetof(struct RStruct, as.ary) + (sizeof(VALUE) * n);
+    VALUE flags = T_STRUCT | (RGENGC_WB_PROTECTED_STRUCT ? FL_WB_PROTECTED : 0);
 
-    n = num_members(klass);
+    if (n > 0 && rb_gc_size_allocatable_p(embedded_size)) {
+        flags |= n << RSTRUCT_EMBED_LEN_SHIFT;
 
-    if (0 < n && n <= RSTRUCT_EMBED_LEN_MAX) {
-        RBASIC(st)->flags &= ~RSTRUCT_EMBED_LEN_MASK;
-        RBASIC(st)->flags |= n << RSTRUCT_EMBED_LEN_SHIFT;
+        NEWOBJ_OF(st, struct RStruct, klass, flags, embedded_size, 0);
+
         rb_mem_clear((VALUE *)st->as.ary, n);
+
+        return (VALUE)st;
     }
     else {
+        NEWOBJ_OF(st, struct RStruct, klass, flags, sizeof(struct RStruct), 0);
+
         st->as.heap.ptr = struct_heap_alloc((VALUE)st, n);
         rb_mem_clear((VALUE *)st->as.heap.ptr, n);
         st->as.heap.len = n;
-    }
 
-    return (VALUE)st;
+        return (VALUE)st;
+    }
 }
 
 VALUE
@@ -1710,7 +1685,7 @@ rb_data_s_def(int argc, VALUE *argv, VALUE klass)
     }
     rest = rb_hash_keys(rest);
     RBASIC_CLEAR_CLASS(rest);
-    OBJ_FREEZE_RAW(rest);
+    OBJ_FREEZE(rest);
     data_class = anonymous_struct(klass);
     setup_data(data_class, rest);
     if (rb_block_given_p()) {
@@ -1718,6 +1693,20 @@ rb_data_s_def(int argc, VALUE *argv, VALUE klass)
     }
 
     return data_class;
+}
+
+VALUE
+rb_data_define(VALUE super, ...)
+{
+    va_list ar;
+    VALUE ary;
+    va_start(ar, super);
+    ary = struct_make_members_list(ar);
+    va_end(ar);
+    if (!super) super = rb_cData;
+    VALUE klass = setup_data(anonymous_struct(super), ary);
+    rb_vm_register_global_object(klass);
+    return klass;
 }
 
 /*
@@ -1813,7 +1802,7 @@ rb_data_initialize_m(int argc, const VALUE *argv, VALUE self)
     rb_hash_foreach(argv[0], struct_hash_set_i, (VALUE)&arg);
     // Freeze early before potentially raising, so that we don't leave an
     // unfrozen copy on the heap, which could get exposed via ObjectSpace.
-    OBJ_FREEZE_RAW(self);
+    OBJ_FREEZE(self);
     if (arg.unknown_keywords != Qnil) {
         rb_exc_raise(rb_keyword_error_new("unknown", arg.unknown_keywords));
     }
@@ -1825,7 +1814,7 @@ static VALUE
 rb_data_init_copy(VALUE copy, VALUE s)
 {
     copy = rb_struct_init_copy(copy, s);
-    RB_OBJ_FREEZE_RAW(copy);
+    RB_OBJ_FREEZE(copy);
     return copy;
 }
 
@@ -1869,7 +1858,7 @@ rb_data_with(int argc, const VALUE *argv, VALUE self)
     }
 
     VALUE h = rb_struct_to_h(self);
-    rb_hash_update_by(h, kwargs, NULL);
+    rb_hash_update_by(h, kwargs, 0);
     return rb_class_new_instance_kw(1, &h, rb_obj_class(self), TRUE);
 }
 
@@ -2142,7 +2131,7 @@ rb_data_inspect(VALUE s)
  *  === Methods for Querying
  *
  *  - #hash: Returns the integer hash code.
- *  - #length, #size: Returns the number of members.
+ *  - #size (aliased as #length): Returns the number of members.
  *
  *  === Methods for Comparing
  *
@@ -2154,13 +2143,13 @@ rb_data_inspect(VALUE s)
  *  === Methods for Fetching
  *
  *  - #[]: Returns the value associated with a given member name.
- *  - #to_a, #values, #deconstruct: Returns the member values in +self+ as an array.
+ *  - #to_a (aliased as #values, #deconstruct): Returns the member values in +self+ as an array.
  *  - #deconstruct_keys: Returns a hash of the name/value pairs
  *    for given member names.
  *  - #dig: Returns the object in nested objects that is specified
  *    by a given member name and additional arguments.
  *  - #members: Returns an array of the member names.
- *  - #select, #filter: Returns an array of member values from +self+,
+ *  - #select (aliased as #filter): Returns an array of member values from +self+,
  *    as selected by the given block.
  *  - #values_at: Returns an array containing values for given member names.
  *
@@ -2175,7 +2164,7 @@ rb_data_inspect(VALUE s)
  *
  *  === Methods for Converting
  *
- *  - #inspect, #to_s: Returns a string representation of +self+.
+ *  - #inspect (aliased as #to_s): Returns a string representation of +self+.
  *  - #to_h: Returns a hash of the member name/value pairs in +self+.
  *
  */

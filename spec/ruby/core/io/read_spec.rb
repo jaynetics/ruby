@@ -23,15 +23,13 @@ describe "IO.read" do
     IO.read(p)
   end
 
-  ruby_version_is "3.0" do
-    # https://bugs.ruby-lang.org/issues/19354
-    it "accepts options as keyword arguments" do
-      IO.read(@fname, 3, 0, mode: "r+").should == @contents[0, 3]
+  # https://bugs.ruby-lang.org/issues/19354
+  it "accepts options as keyword arguments" do
+    IO.read(@fname, 3, 0, mode: "r+").should == @contents[0, 3]
 
-      -> {
-        IO.read(@fname, 3, 0, {mode: "r+"})
-      }.should raise_error(ArgumentError, /wrong number of arguments/)
-    end
+    -> {
+      IO.read(@fname, 3, 0, {mode: "r+"})
+    }.should raise_error(ArgumentError, /wrong number of arguments/)
   end
 
   it "accepts an empty options Hash" do
@@ -115,6 +113,15 @@ describe "IO.read" do
     IO.read(@fname, 1, 10).should == nil
   end
 
+  it "returns an empty string when reading zero bytes" do
+    IO.read(@fname, 0).should == ''
+  end
+
+  it "returns a String in BINARY when passed a size" do
+    IO.read(@fname, 1).encoding.should == Encoding::BINARY
+    IO.read(@fname, 0).encoding.should == Encoding::BINARY
+  end
+
   it "raises an Errno::ENOENT when the requested file does not exist" do
     rm_r @fname
     -> { IO.read @fname }.should raise_error(Errno::ENOENT)
@@ -167,12 +174,19 @@ describe "IO.read from a pipe" do
     platform_is :windows do
       cmd = "|cmd.exe /C echo hello"
     end
-    IO.read(cmd).should == "hello\n"
+
+    suppress_warning do # https://bugs.ruby-lang.org/issues/19630
+      IO.read(cmd).should == "hello\n"
+    end
   end
 
   platform_is_not :windows do
     it "opens a pipe to a fork if the rest is -" do
-      str = IO.read("|-")
+      str = nil
+      suppress_warning do # https://bugs.ruby-lang.org/issues/19630
+        str = IO.read("|-")
+      end
+
       if str # parent
         str.should == "hello from child\n"
       else #child
@@ -187,13 +201,18 @@ describe "IO.read from a pipe" do
     platform_is :windows do
       cmd = "|cmd.exe /C echo hello"
     end
-    IO.read(cmd, 1).should == "h"
+
+    suppress_warning do # https://bugs.ruby-lang.org/issues/19630
+      IO.read(cmd, 1).should == "h"
+    end
   end
 
   platform_is_not :windows do
     it "raises Errno::ESPIPE if passed an offset" do
       -> {
-        IO.read("|sh -c 'echo hello'", 1, 1)
+        suppress_warning do # https://bugs.ruby-lang.org/issues/19630
+          IO.read("|sh -c 'echo hello'", 1, 1)
+        end
       }.should raise_error(Errno::ESPIPE)
     end
   end
@@ -204,11 +223,23 @@ quarantine! do # The process tried to write to a nonexistent pipe.
     # once https://bugs.ruby-lang.org/issues/12230 is fixed.
     it "raises Errno::EINVAL if passed an offset" do
       -> {
-        IO.read("|cmd.exe /C echo hello", 1, 1)
+        suppress_warning do # https://bugs.ruby-lang.org/issues/19630
+          IO.read("|cmd.exe /C echo hello", 1, 1)
+        end
       }.should raise_error(Errno::EINVAL)
     end
   end
 end
+
+  ruby_version_is "3.3" do
+    # https://bugs.ruby-lang.org/issues/19630
+    it "warns about deprecation given a path with a pipe" do
+      cmd = "|echo ok"
+      -> {
+        IO.read(cmd)
+      }.should complain(/IO process creation with a leading '\|'/)
+    end
+  end
 end
 
 describe "IO.read on an empty file" do
@@ -252,21 +283,55 @@ describe "IO#read" do
     @io.read(4).should == '7890'
   end
 
+  it "treats first nil argument as no length limit" do
+    @io.read(nil).should == @contents
+  end
+
+  it "raises an ArgumentError when not passed a valid length" do
+    -> { @io.read(-1) }.should raise_error(ArgumentError)
+  end
+
   it "clears the output buffer if there is nothing to read" do
     @io.pos = 10
 
-    buf = 'non-empty string'
+    buf = +'non-empty string'
 
     @io.read(10, buf).should == nil
 
     buf.should == ''
+
+    buf = +'non-empty string'
+
+    @io.read(nil, buf).should == ""
+
+    buf.should == ''
+
+    buf = +'non-empty string'
+
+    @io.read(0, buf).should == ""
+
+    buf.should == ''
+  end
+
+  it "raise FrozenError if the output buffer is frozen" do
+    @io.read
+    -> { @io.read(0, 'frozen-string'.freeze) }.should raise_error(FrozenError)
+    -> { @io.read(1, 'frozen-string'.freeze) }.should raise_error(FrozenError)
+    -> { @io.read(nil, 'frozen-string'.freeze) }.should raise_error(FrozenError)
+  end
+
+  ruby_bug "", ""..."3.3" do
+    it "raise FrozenError if the output buffer is frozen (2)" do
+      @io.read
+      -> { @io.read(1, ''.freeze) }.should raise_error(FrozenError)
+    end
   end
 
   it "consumes zero bytes when reading zero bytes" do
     @io.read(0).should == ''
     @io.pos.should == 0
 
-    @io.getc.chr.should == '1'
+    @io.getc.should == '1'
   end
 
   it "is at end-of-file when everything has been read" do
@@ -279,53 +344,68 @@ describe "IO#read" do
   end
 
   it "places the specified number of bytes in the buffer" do
-    buf = ""
+    buf = +""
     @io.read 5, buf
 
     buf.should == "12345"
   end
 
   it "expands the buffer when too small" do
-    buf = "ABCDE"
+    buf = +"ABCDE"
     @io.read nil, buf
 
     buf.should == @contents
   end
 
   it "overwrites the buffer" do
-    buf = "ABCDEFGHIJ"
+    buf = +"ABCDEFGHIJ"
     @io.read nil, buf
 
     buf.should == @contents
   end
 
   it "truncates the buffer when too big" do
-    buf = "ABCDEFGHIJKLMNO"
+    buf = +"ABCDEFGHIJKLMNO"
     @io.read nil, buf
     buf.should == @contents
 
     @io.rewind
 
-    buf = "ABCDEFGHIJKLMNO"
+    buf = +"ABCDEFGHIJKLMNO"
     @io.read 5, buf
     buf.should == @contents[0..4]
   end
 
+  it "preserves the encoding of the given buffer" do
+    buffer = ''.encode(Encoding::ISO_8859_1)
+    @io.read(10, buffer)
+
+    buffer.encoding.should == Encoding::ISO_8859_1
+  end
+
+  # https://bugs.ruby-lang.org/issues/20416
+  it "does not preserve the encoding of the given buffer when max length is not provided" do
+    buffer = ''.encode(Encoding::ISO_8859_1)
+    @io.read(nil, buffer)
+
+    buffer.encoding.should_not == Encoding::ISO_8859_1
+  end
+
   it "returns the given buffer" do
-    buf = ""
+    buf = +""
 
     @io.read(nil, buf).should equal buf
   end
 
   it "returns the given buffer when there is nothing to read" do
-    buf = ""
+    buf = +""
 
     @io.read
     @io.read(nil, buf).should equal buf
   end
 
   it "coerces the second argument to string and uses it as a buffer" do
-    buf = "ABCDE"
+    buf = +"ABCDE"
     obj = mock("buff")
     obj.should_receive(:to_str).any_number_of_times.and_return(buf)
 
@@ -523,13 +603,13 @@ describe :io_read_internal_encoding, shared: true do
 
   describe "when passed nil for limit" do
     it "sets the buffer to a transcoded String" do
-      result = @io.read(nil, buf = "")
+      result = @io.read(nil, buf = +"")
       buf.should equal(result)
       buf.should == "ありがとう\n"
     end
 
     it "sets the buffer's encoding to the internal encoding" do
-      buf = "".force_encoding Encoding::ISO_8859_1
+      buf = "".dup.force_encoding Encoding::ISO_8859_1
       @io.read(nil, buf)
       buf.encoding.should equal(Encoding::UTF_8)
     end
@@ -543,17 +623,18 @@ describe :io_read_size_internal_encoding, shared: true do
 
   it "returns a String in BINARY when passed a size" do
     @io.read(4).encoding.should equal(Encoding::BINARY)
+    @io.read(0).encoding.should equal(Encoding::BINARY)
   end
 
   it "does not change the buffer's encoding when passed a limit" do
-    buf = "".force_encoding Encoding::ISO_8859_1
+    buf = "".dup.force_encoding Encoding::ISO_8859_1
     @io.read(4, buf)
     buf.should == [164, 162, 164, 234].pack('C*').force_encoding(Encoding::ISO_8859_1)
     buf.encoding.should equal(Encoding::ISO_8859_1)
   end
 
   it "truncates the buffer but does not change the buffer's encoding when no data remains" do
-    buf = "abc".force_encoding Encoding::ISO_8859_1
+    buf = "abc".dup.force_encoding Encoding::ISO_8859_1
     @io.read
 
     @io.read(1, buf).should be_nil

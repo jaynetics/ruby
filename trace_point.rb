@@ -1,7 +1,5 @@
 # loaded from vm_trace.c
 
-# Document-class: TracePoint
-#
 # A class that provides the functionality of Kernel#set_trace_func in a
 # nice Object-Oriented API.
 #
@@ -39,6 +37,7 @@
 # +:c_call+:: call a C-language routine
 # +:c_return+:: return from a C-language routine
 # +:raise+:: raise an exception
+# +:rescue+:: rescue an exception
 # +:b_call+:: event hook at block entry
 # +:b_return+:: event hook at block ending
 # +:a_call+:: event hook at all calls (+call+, +b_call+, and +c_call+)
@@ -95,6 +94,7 @@ class TracePoint
   # Access from other threads is also forbidden.
   #
   def self.new(*events)
+    Primitive.attr! :use_block
     Primitive.tracepoint_new_s(events)
   end
 
@@ -132,6 +132,7 @@ class TracePoint
   #	    trace.enabled? #=> true
   #
   def self.trace(*events)
+    Primitive.attr! :use_block
     Primitive.tracepoint_trace_s(events)
   end
 
@@ -197,6 +198,7 @@ class TracePoint
   # out calls by itself from :line handler, otherwise it will call itself infinitely).
   #
   def self.allow_reentry
+    Primitive.attr! :use_block
     Primitive.tracepoint_allow_reentry
   end
 
@@ -259,6 +261,7 @@ class TracePoint
   #    #=> RuntimeError: access from outside
   #
   def enable(target: nil, target_line: nil, target_thread: :default)
+    Primitive.attr! :use_block
     Primitive.tracepoint_enable_m(target, target_line, target_thread)
   end
 
@@ -295,6 +298,7 @@ class TracePoint
   #	trace.disable { p tp.lineno }
   #	#=> RuntimeError: access from outside
   def disable
+    Primitive.attr! :use_block
     Primitive.tracepoint_disable_m
   end
 
@@ -377,7 +381,7 @@ class TracePoint
 
   # Return the generated binding object from event.
   #
-  # Note that for +c_call+ and +c_return+ events, the method will return
+  # Note that for +:c_call+ and +:c_return+ events, the method will return
   # +nil+, since C methods themselves do not have bindings.
   def binding
     Primitive.tracepoint_attr_binding
@@ -386,19 +390,19 @@ class TracePoint
   # Return the trace object during event
   #
   # Same as the following, except it returns the correct object (the method
-  # receiver) for +c_call+ and +c_return+ events:
+  # receiver) for +:c_call+ and +:c_return+ events:
   #
   #   trace.binding.eval('self')
   def self
     Primitive.tracepoint_attr_self
   end
 
-  #  Return value from +:return+, +c_return+, and +b_return+ event
+  #  Return value from +:return+, +:c_return+, and +:b_return+ event
   def return_value
     Primitive.tracepoint_attr_return_value
   end
 
-  # Value from exception raised on the +:raise+ event
+  # Value from exception raised on the +:raise+ event, or rescued on the +:rescue+ event.
   def raised_exception
     Primitive.tracepoint_attr_raised_exception
   end

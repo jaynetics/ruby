@@ -43,6 +43,7 @@ class RbBaseCommand(LLDBInterface):
         self.internal_dict = _internal_dict
 
     def __call__(self, debugger, command, exe_ctx, result):
+        self.ruby_globals = RbBaseCommand.lldb_init(debugger)
         self.build_environment(debugger)
         self.call(debugger, command, exe_ctx, result)
 
@@ -54,4 +55,3 @@ class RbBaseCommand(LLDBInterface):
 
     def get_long_help(self):
         return self.__class__.help_string
-

@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 module RubyVM::RJIT
   class InsnCompiler
     # struct rb_calling_info. Storing flags instead of ci.
@@ -56,12 +57,12 @@ module RubyVM::RJIT
       when :putobject then putobject(jit, ctx, asm)
       when :putspecialobject then putspecialobject(jit, ctx, asm)
       when :putstring then putstring(jit, ctx, asm)
+      when :putchilledstring then putchilledstring(jit, ctx, asm)
       when :concatstrings then concatstrings(jit, ctx, asm)
       when :anytostring then anytostring(jit, ctx, asm)
       when :toregexp then toregexp(jit, ctx, asm)
       when :intern then intern(jit, ctx, asm)
       when :newarray then newarray(jit, ctx, asm)
-      # newarraykwsplat
       when :duparray then duparray(jit, ctx, asm)
       # duphash
       when :expandarray then expandarray(jit, ctx, asm)
@@ -89,10 +90,11 @@ module RubyVM::RJIT
       when :opt_send_without_block then opt_send_without_block(jit, ctx, asm)
       when :objtostring then objtostring(jit, ctx, asm)
       when :opt_str_freeze then opt_str_freeze(jit, ctx, asm)
+      when :opt_ary_freeze then opt_ary_freeze(jit, ctx, asm)
+      when :opt_hash_freeze then opt_hash_freeze(jit, ctx, asm)
       when :opt_nil_p then opt_nil_p(jit, ctx, asm)
       # opt_str_uminus
-      # opt_newarray_max
-      when :opt_newarray_min then opt_newarray_min(jit, ctx, asm)
+      when :opt_newarray_send then opt_newarray_send(jit, ctx, asm)
       when :invokesuper then invokesuper(jit, ctx, asm)
       when :invokeblock then invokeblock(jit, ctx, asm)
       when :leave then leave(jit, ctx, asm)
@@ -503,30 +505,7 @@ module RubyVM::RJIT
           shape = C.rb_shape_get_shape_by_id(shape_id)
 
           current_capacity = shape.capacity
-          new_capacity = current_capacity * 2
-
-          # If the object doesn't have the capacity to store the IV,
-          # then we'll need to allocate it.
-          needs_extension = shape.next_iv_index >= current_capacity
-
-          # We can write to the object, but we need to transition the shape
-          ivar_index = shape.next_iv_index
-
-          capa_shape =
-            if needs_extension
-              # We need to add an extended table to the object
-              # First, create an outgoing transition that increases the capacity
-              C.rb_shape_transition_shape_capa(shape, new_capacity)
-            else
-              nil
-            end
-
-          dest_shape =
-            if capa_shape
-              C.rb_shape_get_next(capa_shape, comptime_receiver, ivar_name)
-            else
-              C.rb_shape_get_next(shape, comptime_receiver, ivar_name)
-            end
+          dest_shape = C.rb_shape_get_next_no_warnings(shape, comptime_receiver, ivar_name)
           new_shape_id = C.rb_shape_id(dest_shape)
 
           if new_shape_id == C::OBJ_TOO_COMPLEX_SHAPE_ID
@@ -534,12 +513,18 @@ module RubyVM::RJIT
             return CantCompile
           end
 
+          ivar_index = shape.next_iv_index
+
+          # If the new shape has a different capacity, we need to
+          # reallocate the object.
+          needs_extension = dest_shape.capacity != shape.capacity
+
           if needs_extension
             # Generate the C call so that runtime code will increase
             # the capacity and set the buffer.
             asm.mov(C_ARGS[0], :rax)
             asm.mov(C_ARGS[1], current_capacity)
-            asm.mov(C_ARGS[2], new_capacity)
+            asm.mov(C_ARGS[2], dest_shape.capacity)
             asm.call(C.rb_ensure_iv_list_size)
 
             # Load the receiver again after the function call
@@ -793,9 +778,30 @@ module RubyVM::RJIT
 
       asm.mov(C_ARGS[0], EC)
       asm.mov(C_ARGS[1], to_value(put_val))
+      asm.mov(C_ARGS[2], 0)
       asm.call(C.rb_ec_str_resurrect)
 
-      stack_top = ctx.stack_push(Type::CString)
+      stack_top = ctx.stack_push(Type::TString)
+      asm.mov(stack_top, C_RET)
+
+      KeepCompiling
+    end
+
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def putchilledstring(jit, ctx, asm)
+      put_val = jit.operand(0, ruby: true)
+
+      # Save the PC and SP because the callee will allocate
+      jit_prepare_routine_call(jit, ctx, asm)
+
+      asm.mov(C_ARGS[0], EC)
+      asm.mov(C_ARGS[1], to_value(put_val))
+      asm.mov(C_ARGS[2], 1)
+      asm.call(C.rb_ec_str_resurrect)
+
+      stack_top = ctx.stack_push(Type::TString)
       asm.mov(stack_top, C_RET)
 
       KeepCompiling
@@ -818,7 +824,7 @@ module RubyVM::RJIT
       asm.call(C.rb_str_concat_literals)
 
       ctx.stack_pop(n)
-      stack_ret = ctx.stack_push(Type::CString)
+      stack_ret = ctx.stack_push(Type::TString)
       asm.mov(stack_ret, C_RET)
 
       KeepCompiling
@@ -933,13 +939,11 @@ module RubyVM::RJIT
       asm.call(C.rb_ec_ary_new_from_values)
 
       ctx.stack_pop(n)
-      stack_ret = ctx.stack_push(Type::CArray)
+      stack_ret = ctx.stack_push(Type::TArray)
       asm.mov(stack_ret, C_RET)
 
       KeepCompiling
     end
-
-    # newarraykwsplat
 
     # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
@@ -955,7 +959,7 @@ module RubyVM::RJIT
       asm.mov(C_ARGS[0], ary)
       asm.call(C.rb_ary_resurrect)
 
-      stack_ret = ctx.stack_push(Type::CArray)
+      stack_ret = ctx.stack_push(Type::TArray)
       asm.mov(stack_ret, C_RET)
 
       KeepCompiling
@@ -1430,6 +1434,10 @@ module RubyVM::RJIT
       mid = C.vm_ci_mid(cd.ci)
       calling = build_calling(ci: cd.ci, block_handler: blockiseq)
 
+      if calling.flags & C::VM_CALL_FORWARDING != 0
+        return CantCompile
+      end
+
       # vm_sendish
       cme, comptime_recv_klass = jit_search_method(jit, ctx, asm, mid, calling)
       if cme == CantCompile
@@ -1487,6 +1495,42 @@ module RubyVM::RJIT
     # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
     # @param asm [RubyVM::RJIT::Assembler]
+    def opt_ary_freeze(jit, ctx, asm)
+      unless Invariants.assume_bop_not_redefined(jit, C::ARRAY_REDEFINED_OP_FLAG, C::BOP_FREEZE)
+        return CantCompile;
+      end
+
+      ary = jit.operand(0, ruby: true)
+
+      # Push the return value onto the stack
+      stack_ret = ctx.stack_push(Type::CArray)
+      asm.mov(:rax, to_value(ary))
+      asm.mov(stack_ret, :rax)
+
+      KeepCompiling
+    end
+
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def opt_hash_freeze(jit, ctx, asm)
+      unless Invariants.assume_bop_not_redefined(jit, C::HASH_REDEFINED_OP_FLAG, C::BOP_FREEZE)
+        return CantCompile;
+      end
+
+      hash = jit.operand(0, ruby: true)
+
+      # Push the return value onto the stack
+      stack_ret = ctx.stack_push(Type::CHash)
+      asm.mov(:rax, to_value(hash))
+      asm.mov(stack_ret, :rax)
+
+      KeepCompiling
+    end
+
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
     def opt_str_freeze(jit, ctx, asm)
       unless Invariants.assume_bop_not_redefined(jit, C::STRING_REDEFINED_OP_FLAG, C::BOP_FREEZE)
         return CantCompile;
@@ -1510,7 +1554,21 @@ module RubyVM::RJIT
     end
 
     # opt_str_uminus
-    # opt_newarray_max
+
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def opt_newarray_send(jit, ctx, asm)
+      type = C.ID2SYM jit.operand(1)
+
+      case type
+      when :min then opt_newarray_min(jit, ctx, asm)
+      when :max then opt_newarray_max(jit, ctx, asm)
+      when :hash then opt_newarray_hash(jit, ctx, asm)
+      else
+        return CantCompile
+      end
+    end
 
     # @param jit [RubyVM::RJIT::JITState]
     # @param ctx [RubyVM::RJIT::Context]
@@ -1529,6 +1587,56 @@ module RubyVM::RJIT
       asm.mov(C_ARGS[1], num)
       asm.mov(C_ARGS[2], :rax)
       asm.call(C.rb_vm_opt_newarray_min)
+
+      ctx.stack_pop(num)
+      stack_ret = ctx.stack_push(Type::Unknown)
+      asm.mov(stack_ret, C_RET)
+
+      KeepCompiling
+    end
+
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def opt_newarray_max(jit, ctx, asm)
+      num = jit.operand(0)
+
+      # Save the PC and SP because we may allocate
+      jit_prepare_routine_call(jit, ctx, asm)
+
+      offset_magnitude = C.VALUE.size * num
+      values_opnd = ctx.sp_opnd(-offset_magnitude)
+      asm.lea(:rax, values_opnd)
+
+      asm.mov(C_ARGS[0], EC)
+      asm.mov(C_ARGS[1], num)
+      asm.mov(C_ARGS[2], :rax)
+      asm.call(C.rb_vm_opt_newarray_max)
+
+      ctx.stack_pop(num)
+      stack_ret = ctx.stack_push(Type::Unknown)
+      asm.mov(stack_ret, C_RET)
+
+      KeepCompiling
+    end
+
+    # @param jit [RubyVM::RJIT::JITState]
+    # @param ctx [RubyVM::RJIT::Context]
+    # @param asm [RubyVM::RJIT::Assembler]
+    def opt_newarray_hash(jit, ctx, asm)
+      num = jit.operand(0)
+
+      # Save the PC and SP because we may allocate
+      jit_prepare_routine_call(jit, ctx, asm)
+
+      offset_magnitude = C.VALUE.size * num
+      values_opnd = ctx.sp_opnd(-offset_magnitude)
+      asm.lea(:rax, values_opnd)
+
+      asm.mov(C_ARGS[0], EC)
+      asm.mov(C_ARGS[1], num)
+      asm.mov(C_ARGS[2], :rax)
+      asm.call(C.rb_vm_opt_newarray_hash)
 
       ctx.stack_pop(num)
       stack_ret = ctx.stack_push(Type::Unknown)
@@ -1877,24 +1985,28 @@ module RubyVM::RJIT
         end
 
         # Jump to target0 on jnz
-        branch_stub.compile = proc do |branch_asm|
-          branch_asm.comment("branchif #{branch_stub.shape}")
-          branch_asm.stub(branch_stub) do
-            case branch_stub.shape
-            in Default
-              branch_asm.jnz(branch_stub.target0.address)
-              branch_asm.jmp(branch_stub.target1.address)
-            in Next0
-              branch_asm.jz(branch_stub.target1.address)
-            in Next1
-              branch_asm.jnz(branch_stub.target0.address)
-            end
-          end
-        end
+        branch_stub.compile = compile_branchif(branch_stub)
         branch_stub.compile.call(asm)
       end
 
       EndBlock
+    end
+
+    def compile_branchif(branch_stub) # Proc escapes arguments in memory
+      proc do |branch_asm|
+        branch_asm.comment("branchif #{branch_stub.shape}")
+        branch_asm.stub(branch_stub) do
+          case branch_stub.shape
+          in Default
+            branch_asm.jnz(branch_stub.target0.address)
+            branch_asm.jmp(branch_stub.target1.address)
+          in Next0
+            branch_asm.jz(branch_stub.target1.address)
+          in Next1
+            branch_asm.jnz(branch_stub.target0.address)
+          end
+        end
+      end
     end
 
     # @param jit [RubyVM::RJIT::JITState]
@@ -1938,24 +2050,28 @@ module RubyVM::RJIT
         end
 
         # Jump to target0 on jz
-        branch_stub.compile = proc do |branch_asm|
-          branch_asm.comment("branchunless #{branch_stub.shape}")
-          branch_asm.stub(branch_stub) do
-            case branch_stub.shape
-            in Default
-              branch_asm.jz(branch_stub.target0.address)
-              branch_asm.jmp(branch_stub.target1.address)
-            in Next0
-              branch_asm.jnz(branch_stub.target1.address)
-            in Next1
-              branch_asm.jz(branch_stub.target0.address)
-            end
-          end
-        end
+        branch_stub.compile = compile_branchunless(branch_stub)
         branch_stub.compile.call(asm)
       end
 
       EndBlock
+    end
+
+    def compile_branchunless(branch_stub) # Proc escapes arguments in memory
+      proc do |branch_asm|
+        branch_asm.comment("branchunless #{branch_stub.shape}")
+        branch_asm.stub(branch_stub) do
+          case branch_stub.shape
+          in Default
+            branch_asm.jz(branch_stub.target0.address)
+            branch_asm.jmp(branch_stub.target1.address)
+          in Next0
+            branch_asm.jnz(branch_stub.target1.address)
+          in Next1
+            branch_asm.jz(branch_stub.target0.address)
+          end
+        end
+      end
     end
 
     # @param jit [RubyVM::RJIT::JITState]
@@ -1998,24 +2114,28 @@ module RubyVM::RJIT
         end
 
         # Jump to target0 on je
-        branch_stub.compile = proc do |branch_asm|
-          branch_asm.comment("branchnil #{branch_stub.shape}")
-          branch_asm.stub(branch_stub) do
-            case branch_stub.shape
-            in Default
-              branch_asm.je(branch_stub.target0.address)
-              branch_asm.jmp(branch_stub.target1.address)
-            in Next0
-              branch_asm.jne(branch_stub.target1.address)
-            in Next1
-              branch_asm.je(branch_stub.target0.address)
-            end
-          end
-        end
+        branch_stub.compile = compile_branchnil(branch_stub)
         branch_stub.compile.call(asm)
       end
 
       EndBlock
+    end
+
+    def compile_branchnil(branch_stub) # Proc escapes arguments in memory
+      proc do |branch_asm|
+        branch_asm.comment("branchnil #{branch_stub.shape}")
+        branch_asm.stub(branch_stub) do
+          case branch_stub.shape
+          in Default
+            branch_asm.je(branch_stub.target0.address)
+            branch_asm.jmp(branch_stub.target1.address)
+          in Next0
+            branch_asm.jne(branch_stub.target1.address)
+          in Next1
+            branch_asm.je(branch_stub.target0.address)
+          end
+        end
+      end
     end
 
     # once
@@ -2053,7 +2173,7 @@ module RubyVM::RJIT
         end
 
         # Check if the key is the same value
-        asm.cmp(key_opnd, comptime_key)
+        asm.cmp(key_opnd, to_value(comptime_key))
         side_exit = side_exit(jit, starting_context)
         jit_chain_guard(:jne, jit, starting_context, asm, side_exit)
 
@@ -2669,7 +2789,7 @@ module RubyVM::RJIT
       sample_rhs = jit.peek_at_stack(0)
       sample_lhs = jit.peek_at_stack(1)
 
-      # We are not allowing module here because the module hierachy can change at runtime.
+      # We are not allowing module here because the module hierarchy can change at runtime.
       if C.RB_TYPE_P(sample_rhs, C::RUBY_T_CLASS)
         return false
       end
@@ -2931,15 +3051,12 @@ module RubyVM::RJIT
     # @param ctx [RubyVM::RJIT::Context]
     # @param asm [RubyVM::RJIT::Assembler]
     def jit_rb_str_empty_p(jit, ctx, asm, argc, known_recv_class)
-      # Assume same offset to len embedded or not so we can use one code path to read the length
-      #assert_equal(C.RString.offsetof(:as, :heap, :len), C.RString.offsetof(:as, :embed, :len))
-
       recv_opnd = ctx.stack_pop(1)
       out_opnd = ctx.stack_push(Type::UnknownImm)
 
       asm.comment('get string length')
       asm.mov(:rax, recv_opnd)
-      str_len_opnd = [:rax, C.RString.offsetof(:as, :heap, :len)]
+      str_len_opnd = [:rax, C.RString.offsetof(:len)]
 
       asm.cmp(str_len_opnd, 0)
       asm.mov(:rax, Qfalse)
@@ -3022,7 +3139,7 @@ module RubyVM::RJIT
       asm.test(recv_reg, C::RUBY_ENCODING_MASK)
 
       # Push once, use the resulting operand in both branches below.
-      stack_ret = ctx.stack_push(Type::CString)
+      stack_ret = ctx.stack_push(Type::TString)
 
       enc_mismatch = asm.new_label('enc_mismatch')
       asm.jnz(enc_mismatch)
@@ -3581,18 +3698,22 @@ module RubyVM::RJIT
           @exit_compiler.compile_branch_stub(deeper, ocb_asm, branch_stub, true)
           @ocb.write(ocb_asm)
         end
-        branch_stub.compile = proc do |branch_asm|
-          # Not using `asm.comment` here since it's usually put before cmp/test before this.
-          branch_asm.stub(branch_stub) do
-            case branch_stub.shape
-            in Default
-              branch_asm.public_send(opcode, branch_stub.target0.address)
-            end
-          end
-        end
+        branch_stub.compile = compile_jit_chain_guard(branch_stub, opcode:)
         branch_stub.compile.call(asm)
       else
         asm.public_send(opcode, side_exit)
+      end
+    end
+
+    def compile_jit_chain_guard(branch_stub, opcode:) # Proc escapes arguments in memory
+      proc do |branch_asm|
+        # Not using `asm.comment` here since it's usually put before cmp/test before this.
+        branch_asm.stub(branch_stub) do
+          case branch_stub.shape
+          in Default
+            branch_asm.public_send(opcode, branch_stub.target0.address)
+          end
+        end
       end
     end
 
@@ -3676,7 +3797,7 @@ module RubyVM::RJIT
 
           ctx.upgrade_opnd_type(insn_opnd, Type::Flonum)
         end
-      elsif C.FL_TEST(known_klass, C::RUBY_FL_SINGLETON) && comptime_obj == C.rb_class_attached_object(known_klass)
+      elsif C.RCLASS_SINGLETON_P(known_klass) && comptime_obj == C.rb_class_attached_object(known_klass)
         # Singleton classes are attached to one specific object, so we can
         # avoid one memory access (and potentially the is_heap check) by
         # looking for the expected object directly.
@@ -3719,9 +3840,14 @@ module RubyVM::RJIT
         jit_chain_guard(:jne, jit, ctx, asm, side_exit, limit:)
 
         if known_klass == C.rb_cString
-          ctx.upgrade_opnd_type(insn_opnd, Type::CString)
+          # Upgrading to Type::CString here is incorrect.
+          # The guard we put only checks RBASIC_CLASS(obj),
+          # which adding a singleton class can change. We
+          # additionally need to know the string is frozen
+          # to claim Type::CString.
+          ctx.upgrade_opnd_type(insn_opnd, Type::TString)
         elsif known_klass == C.rb_cArray
-          ctx.upgrade_opnd_type(insn_opnd, Type::CArray)
+          ctx.upgrade_opnd_type(insn_opnd, Type::TArray)
         end
       end
     end
@@ -4387,6 +4513,11 @@ module RubyVM::RJIT
         return CantCompile
       end
 
+      if flags & C::VM_CALL_KW_SPLAT != 0
+        asm.incr_counter(:send_iseq_kw_splat)
+        return CantCompile
+      end
+
       if iseq_has_rest && opt_num != 0
         asm.incr_counter(:send_iseq_has_rest_and_optional)
         return CantCompile
@@ -4493,7 +4624,8 @@ module RubyVM::RJIT
       # Check if we need the arg0 splat handling of vm_callee_setup_block_arg
       arg_setup_block = (calling.block_handler == :captured) # arg_setup_type: arg_setup_block (invokeblock)
       block_arg0_splat = arg_setup_block && argc == 1 &&
-        iseq.body.param.flags.has_lead && !iseq.body.param.flags.ambiguous_param0
+        (iseq.body.param.flags.has_lead || opt_num > 1) &&
+        !iseq.body.param.flags.ambiguous_param0
       if block_arg0_splat
         # If block_arg0_splat, we still need side exits after splat, but
         # doing push_splat_args here disallows it. So bail out.
@@ -4505,6 +4637,13 @@ module RubyVM::RJIT
         # but doing_kw_call means it's not a simple ISEQ.
         if doing_kw_call
           asm.incr_counter(:invokeblock_iseq_arg0_has_kw)
+          return CantCompile
+        end
+        # The block_arg0_splat implementation cannot deal with optional parameters.
+        # This is a setup_parameters_complex() situation and interacts with the
+        # starting position of the callee.
+        if opt_num > 1
+          asm.incr_counter(:invokeblock_iseq_arg0_optional)
           return CantCompile
         end
       end
@@ -4520,6 +4659,11 @@ module RubyVM::RJIT
           asm.incr_counter(:send_iseq_splat_arity_error)
           return CantCompile
         end
+      end
+
+      # Don't compile forwardable iseqs
+      if iseq.body.param.flags.forwardable
+        return CantCompile
       end
 
       # We will not have CantCompile from here.
@@ -4655,7 +4799,7 @@ module RubyVM::RJIT
           asm.call(C.rb_ec_ary_new_from_values)
 
           ctx.stack_pop(n)
-          stack_ret = ctx.stack_push(Type::CArray)
+          stack_ret = ctx.stack_push(Type::TArray)
           asm.mov(stack_ret, C_RET)
         end
       end
@@ -4851,13 +4995,10 @@ module RubyVM::RJIT
 
       asm.comment('inlined leaf builtin')
 
-      # Skip this if it doesn't trigger GC
-      if iseq.body.builtin_attrs & C::BUILTIN_ATTR_NO_GC == 0
-        # The callee may allocate, e.g. Integer#abs on a Bignum.
-        # Save SP for GC, save PC for allocation tracing, and prepare
-        # for global invalidation after GC's VM lock contention.
-        jit_prepare_routine_call(jit, ctx, asm)
-      end
+      # The callee may allocate, e.g. Integer#abs on a Bignum.
+      # Save SP for GC, save PC for allocation tracing, and prepare
+      # for global invalidation after GC's VM lock contention.
+      jit_prepare_routine_call(jit, ctx, asm)
 
       # Call the builtin func (ec, recv, arg1, arg2, ...)
       asm.mov(C_ARGS[0], EC)
@@ -5364,6 +5505,12 @@ module RubyVM::RJIT
         return CantCompile
       end
 
+      if c_method_tracing_currently_enabled?
+        # Don't JIT if tracing c_call or c_return
+        asm.incr_counter(:send_cfunc_tracing)
+        return CantCompile
+      end
+
       off = cme.def.body.optimized.index
 
       recv_idx = argc # blockarg is not supported
@@ -5485,14 +5632,14 @@ module RubyVM::RJIT
       end
       jit_save_pc(jit, asm, comment: 'save PC to caller CFP')
 
+      sp_offset = ctx.sp_offset + 3 + local_size + (doing_kw_call ? 1 : 0) # callee_sp
       local_size.times do |i|
         asm.comment('set local variables') if i == 0
-        local_index = ctx.sp_offset + i
+        local_index = sp_offset + i - local_size - 3
         asm.mov([SP, C.VALUE.size * local_index], Qnil)
       end
 
       asm.comment('set up EP with managing data')
-      sp_offset = ctx.sp_offset + 3 + local_size + (doing_kw_call ? 1 : 0)
       ep_offset = sp_offset - 1
       # ep[-2]: cref_or_me
       asm.mov(:rax, cme.to_i)
@@ -5550,7 +5697,6 @@ module RubyVM::RJIT
       sp_reg = iseq ? SP : :rax
       asm.lea(sp_reg, [SP, C.VALUE.size * sp_offset])
       asm.mov([CFP, cfp_offset + C.rb_control_frame_t.offsetof(:sp)], sp_reg)
-      asm.mov([CFP, cfp_offset + C.rb_control_frame_t.offsetof(:__bp__)], sp_reg) # TODO: get rid of this!!
 
       # cfp->jit_return is used only for ISEQs
       if iseq
@@ -5572,16 +5718,7 @@ module RubyVM::RJIT
           @exit_compiler.compile_branch_stub(return_ctx, ocb_asm, branch_stub, true)
           @ocb.write(ocb_asm)
         end
-        branch_stub.compile = proc do |branch_asm|
-          branch_asm.comment('set jit_return to callee CFP')
-          branch_asm.stub(branch_stub) do
-            case branch_stub.shape
-            in Default
-              branch_asm.mov(:rax, branch_stub.target0.address)
-              branch_asm.mov([CFP, cfp_offset + C.rb_control_frame_t.offsetof(:jit_return)], :rax)
-            end
-          end
-        end
+        branch_stub.compile = compile_jit_return(branch_stub, cfp_offset:)
         branch_stub.compile.call(asm)
       end
 
@@ -5590,6 +5727,19 @@ module RubyVM::RJIT
       cfp_reg = iseq ? CFP : :rax
       asm.lea(cfp_reg, [CFP, cfp_offset])
       asm.mov([EC, C.rb_execution_context_t.offsetof(:cfp)], cfp_reg)
+    end
+
+    def compile_jit_return(branch_stub, cfp_offset:) # Proc escapes arguments in memory
+      proc do |branch_asm|
+        branch_asm.comment('set jit_return to callee CFP')
+        branch_asm.stub(branch_stub) do
+          case branch_stub.shape
+          in Default
+            branch_asm.mov(:rax, branch_stub.target0.address)
+            branch_asm.mov([CFP, cfp_offset + C.rb_control_frame_t.offsetof(:jit_return)], :rax)
+          end
+        end
+      end
     end
 
     # CALLER_SETUP_ARG: Return CantCompile if not supported
@@ -5742,7 +5892,7 @@ module RubyVM::RJIT
       asm.cmovz(len_reg, [array_reg, C.RArray.offsetof(:as, :heap, :len)])
     end
 
-    # Generate RARRAY_CONST_PTR_TRANSIENT (part of RARRAY_AREF)
+    # Generate RARRAY_CONST_PTR (part of RARRAY_AREF)
     def jit_array_ptr(asm, array_reg, ary_opnd) # clobbers array_reg
       asm.comment('get array pointer for embedded or heap')
 
@@ -5812,7 +5962,12 @@ module RubyVM::RJIT
         @exit_compiler.compile_branch_stub(ctx, ocb_asm, branch_stub, true)
         @ocb.write(ocb_asm)
       end
-      branch_stub.compile = proc do |branch_asm|
+      branch_stub.compile = compile_jit_direct_jump(branch_stub, comment:)
+      branch_stub.compile.call(asm)
+    end
+
+    def compile_jit_direct_jump(branch_stub, comment:) # Proc escapes arguments in memory
+      proc do |branch_asm|
         branch_asm.comment(comment)
         branch_asm.stub(branch_stub) do
           case branch_stub.shape
@@ -5823,7 +5978,6 @@ module RubyVM::RJIT
           end
         end
       end
-      branch_stub.compile.call(asm)
     end
 
     # @param jit [RubyVM::RJIT::JITState]

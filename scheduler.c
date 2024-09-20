@@ -161,6 +161,21 @@ verify_interface(VALUE scheduler)
     }
 }
 
+static VALUE
+fiber_scheduler_close(VALUE scheduler)
+{
+    return rb_fiber_scheduler_close(scheduler);
+}
+
+static VALUE
+fiber_scheduler_close_ensure(VALUE _thread)
+{
+    rb_thread_t *thread = (rb_thread_t*)_thread;
+    thread->scheduler = Qnil;
+
+    return Qnil;
+}
+
 VALUE
 rb_fiber_scheduler_set(VALUE scheduler)
 {
@@ -178,7 +193,8 @@ rb_fiber_scheduler_set(VALUE scheduler)
     // That way, we do not need to consider interactions, e.g., of a Fiber from
     // the previous scheduler with the new scheduler.
     if (thread->scheduler != Qnil) {
-        rb_fiber_scheduler_close(thread->scheduler);
+        // rb_fiber_scheduler_close(thread->scheduler);
+        rb_ensure(fiber_scheduler_close, thread->scheduler, fiber_scheduler_close_ensure, (VALUE)thread);
     }
 
     thread->scheduler = scheduler;
@@ -458,7 +474,7 @@ VALUE rb_fiber_scheduler_io_selectv(VALUE scheduler, int argc, VALUE *argv)
 
 /*
  *  Document-method: Fiber::Scheduler#io_read
- *  call-seq: io_read(io, buffer, length) -> read length or -errno
+ *  call-seq: io_read(io, buffer, length, offset) -> read length or -errno
  *
  *  Invoked by IO#read or IO#Buffer.read to read +length+ bytes from +io+ into a
  *  specified +buffer+ (see IO::Buffer) at the given +offset+.
@@ -518,7 +534,7 @@ rb_fiber_scheduler_io_pread(VALUE scheduler, VALUE io, rb_off_t from, VALUE buff
 
 /*
  *  Document-method: Scheduler#io_write
- *  call-seq: io_write(io, buffer, length) -> written length or -errno
+ *  call-seq: io_write(io, buffer, length, offset) -> written length or -errno
  *
  *  Invoked by IO#write or IO::Buffer#write to write +length+ bytes to +io+ from
  *  from a specified +buffer+ (see IO::Buffer) at the given +offset+.

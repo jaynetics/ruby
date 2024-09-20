@@ -6,7 +6,7 @@
 # See LICENSE.txt for permissions.
 #++
 
-require_relative "optparse"
+require_relative "vendored_optparse"
 require_relative "requirement"
 require_relative "user_interaction"
 
@@ -190,7 +190,7 @@ class Gem::Command
             "Please specify at least one gem name (e.g. gem build GEMNAME)"
     end
 
-    args.select {|arg| arg !~ /^-/ }
+    args.reject {|arg| arg.start_with?("-") }
   end
 
   ##
@@ -485,7 +485,7 @@ class Gem::Command
 
     @parser.separator nil
     @parser.separator "  Description:"
-    formatted.split("\n").each do |line|
+    formatted.each_line do |line|
       @parser.separator "    #{line.rstrip}"
     end
   end
@@ -512,8 +512,8 @@ class Gem::Command
 
     @parser.separator nil
     @parser.separator "  #{title}:"
-    content.split(/\n/).each do |line|
-      @parser.separator "    #{line}"
+    content.each_line do |line|
+      @parser.separator "    #{line.rstrip}"
     end
   end
 
@@ -522,7 +522,7 @@ class Gem::Command
 
     @parser.separator nil
     @parser.separator "  Summary:"
-    wrap(@summary, 80 - 4).split("\n").each do |line|
+    wrap(@summary, 80 - 4).each_line do |line|
       @parser.separator "    #{line.strip}"
     end
   end

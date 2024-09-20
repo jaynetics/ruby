@@ -2,19 +2,7 @@ require_relative '../../spec_helper'
 require_relative 'fixtures/common'
 
 ruby_version_is '3.3' do
-  has_fchdir = begin
-    dir = Dir.new('.')
-    Dir.fchdir(dir.fileno)
-    true
-  rescue NotImplementedError
-    false
-  rescue Exception
-    true
-  ensure
-    dir.close
-  end
-
-  if has_fchdir
+  guard -> { Dir.respond_to? :fchdir } do
     describe "Dir.fchdir" do
       before :all do
         DirSpecs.create_mock_dirs
@@ -58,7 +46,7 @@ ruby_version_is '3.3' do
       end
 
       it "raises a SystemCallError if the file descriptor given is not valid" do
-        -> { Dir.fchdir -1 }.should raise_error(SystemCallError)
+        -> { Dir.fchdir(-1) }.should raise_error(SystemCallError)
         -> { Dir.fchdir(-1) { } }.should raise_error(SystemCallError)
       end
 
@@ -67,7 +55,9 @@ ruby_version_is '3.3' do
         -> { Dir.fchdir($stdout.fileno) { } }.should raise_error(SystemCallError)
       end
     end
-  else
+  end
+
+  guard_not -> { Dir.respond_to? :fchdir } do
     describe "Dir.fchdir" do
       it "raises NotImplementedError" do
         -> { Dir.fchdir 1 }.should raise_error(NotImplementedError)

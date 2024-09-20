@@ -8,6 +8,31 @@ require 'strscan'
 require 'test/unit'
 
 module StringScannerTests
+  def test_peek_byte
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner('ab')
+    assert_equal 97, s.peek_byte
+    assert_equal 97, s.scan_byte
+    assert_equal 98, s.peek_byte
+    assert_equal 98, s.scan_byte
+    assert_nil s.peek_byte
+    assert_nil s.scan_byte
+  end
+
+  def test_scan_byte
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner('ab')
+    assert_equal 97, s.scan_byte
+    assert_equal 98, s.scan_byte
+    assert_nil s.scan_byte
+
+    str = "\244\242".dup.force_encoding("euc-jp")
+    s = StringScanner.new(str)
+    assert_equal str.getbyte(s.pos), s.scan_byte
+    assert_equal str.getbyte(s.pos), s.scan_byte
+    assert_nil s.scan_byte
+  end
+
   def test_s_new
     s = create_string_scanner('test string')
     assert_instance_of StringScanner, s
@@ -237,7 +262,7 @@ module StringScannerTests
   end
 
   def test_scan
-    s = create_string_scanner('stra strb strc', true)
+    s = create_string_scanner("stra strb\0strc", true)
     tmp = s.scan(/\w+/)
     assert_equal 'stra', tmp
 
@@ -245,7 +270,7 @@ module StringScannerTests
     assert_equal ' ', tmp
 
     assert_equal 'strb', s.scan(/\w+/)
-    assert_equal ' ',    s.scan(/\s+/)
+    assert_equal "\u0000", s.scan(/\0/)
 
     tmp = s.scan(/\w+/)
     assert_equal 'strc', tmp
@@ -287,11 +312,14 @@ module StringScannerTests
   end
 
   def test_scan_string
-    s = create_string_scanner('stra strb strc')
+    s = create_string_scanner("stra strb\0strc")
     assert_equal 'str', s.scan('str')
     assert_equal 'str', s[0]
     assert_equal 3, s.pos
     assert_equal 'a ', s.scan('a ')
+    assert_equal 'strb', s.scan('strb')
+    assert_equal "\u0000", s.scan("\0")
+    assert_equal 'strc', s.scan('strc')
 
     str = 'stra strb strc'.dup
     s = create_string_scanner(str, false)
@@ -558,6 +586,16 @@ module StringScannerTests
     assert_nil s.matched_size
   end
 
+  def test_empty_encoding_utf8
+    ss = create_string_scanner('')
+    assert_equal(Encoding::UTF_8, ss.rest.encoding)
+  end
+
+  def test_empty_encoding_ascii_8bit
+    ss = create_string_scanner(''.dup.force_encoding("ASCII-8BIT"))
+    assert_equal(Encoding::ASCII_8BIT, ss.rest.encoding)
+  end
+
   def test_encoding
     ss = create_string_scanner("\xA1\xA2".dup.force_encoding("euc-jp"))
     assert_equal(Encoding::EUC_JP, ss.scan(/./e).encoding)
@@ -633,11 +671,45 @@ module StringScannerTests
     assert_equal(nil, s.exist?(/e/))
   end
 
-  def test_exist_p_string
+  def test_exist_p_invalid_argument
     s = create_string_scanner("test string")
     assert_raise(TypeError) do
-      s.exist?(" ")
+      s.exist?(1)
     end
+  end
+
+  def test_exist_p_string
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner("test string")
+    assert_equal(3, s.exist?("s"))
+    assert_equal(0, s.pos)
+    s.scan("test")
+    assert_equal(2, s.exist?("s"))
+    assert_equal(4, s.pos)
+    assert_equal(nil, s.exist?("e"))
+  end
+
+  def test_scan_until
+    s = create_string_scanner("Foo Bar\0Baz")
+    assert_equal("Foo", s.scan_until(/Foo/))
+    assert_equal(3, s.pos)
+    assert_equal(" Bar", s.scan_until(/Bar/))
+    assert_equal(7, s.pos)
+    assert_equal(nil, s.skip_until(/Qux/))
+    assert_equal("\u0000Baz", s.scan_until(/Baz/))
+    assert_equal(11, s.pos)
+  end
+
+  def test_scan_until_string
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner("Foo Bar\0Baz")
+    assert_equal("Foo", s.scan_until("Foo"))
+    assert_equal(3, s.pos)
+    assert_equal(" Bar", s.scan_until("Bar"))
+    assert_equal(7, s.pos)
+    assert_equal(nil, s.skip_until("Qux"))
+    assert_equal("\u0000Baz", s.scan_until("Baz"))
+    assert_equal(11, s.pos)
   end
 
   def test_skip_until
@@ -649,6 +721,16 @@ module StringScannerTests
     assert_equal(nil, s.skip_until(/Qux/))
   end
 
+  def test_skip_until_string
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner("Foo Bar Baz")
+    assert_equal(3, s.skip_until("Foo"))
+    assert_equal(3, s.pos)
+    assert_equal(4, s.skip_until("Bar"))
+    assert_equal(7, s.pos)
+    assert_equal(nil, s.skip_until("Qux"))
+  end
+
   def test_check_until
     s = create_string_scanner("Foo Bar Baz")
     assert_equal("Foo", s.check_until(/Foo/))
@@ -656,6 +738,16 @@ module StringScannerTests
     assert_equal("Foo Bar", s.check_until(/Bar/))
     assert_equal(0, s.pos)
     assert_equal(nil, s.check_until(/Qux/))
+  end
+
+  def test_check_until_string
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner("Foo Bar Baz")
+    assert_equal("Foo", s.check_until("Foo"))
+    assert_equal(0, s.pos)
+    assert_equal("Foo Bar", s.check_until("Bar"))
+    assert_equal(0, s.pos)
+    assert_equal(nil, s.check_until("Qux"))
   end
 
   def test_search_full
@@ -667,6 +759,19 @@ module StringScannerTests
     assert_equal(8, s.search_full(/Bar /, true, false))
     assert_equal(8, s.pos)
     assert_equal("Baz", s.search_full(/az/, true, true))
+    assert_equal(11, s.pos)
+  end
+
+  def test_search_full_string
+    omit("not implemented on TruffleRuby") if RUBY_ENGINE == "truffleruby"
+    s = create_string_scanner("Foo Bar Baz")
+    assert_equal(8, s.search_full("Bar ", false, false))
+    assert_equal(0, s.pos)
+    assert_equal("Foo Bar ", s.search_full("Bar ", false, true))
+    assert_equal(0, s.pos)
+    assert_equal(8, s.search_full("Bar ", true, false))
+    assert_equal(8, s.pos)
+    assert_equal("Baz", s.search_full("az", true, true))
     assert_equal(11, s.pos)
   end
 
@@ -737,8 +842,8 @@ module StringScannerTests
   def test_captures
     s = create_string_scanner("Timestamp: Fri Dec 12 1975 14:39")
     s.scan("Timestamp: ")
-    s.scan(/(\w+) (\w+) (\d+) /)
-    assert_equal(["Fri", "Dec", "12"], s.captures)
+    s.scan(/(\w+) (\w+) (\d+) (1980)?/)
+    assert_equal(["Fri", "Dec", "12", nil], s.captures)
     s.scan(/(\w+) (\w+) (\d+) /)
     assert_nil(s.captures)
   end
@@ -775,6 +880,7 @@ module StringScannerTests
   def test_named_captures
     omit("not implemented on TruffleRuby") if ["truffleruby"].include?(RUBY_ENGINE)
     scan = StringScanner.new("foobarbaz")
+    assert_equal({}, scan.named_captures)
     assert_equal(9, scan.match?(/(?<f>foo)(?<r>bar)(?<z>baz)/))
     assert_equal({"f" => "foo", "r" => "bar", "z" => "baz"}, scan.named_captures)
   end
@@ -829,5 +935,13 @@ class TestStringScannerFixedAnchor < Test::Unit::TestCase
     s = create_string_scanner("ab")
     assert_equal 1, s.skip(/a/)
     assert_nil      s.skip(/^b/)
+  end
+
+  # ruby/strscan#86
+  def test_scan_shared_string
+    s = "hellohello"[5..-1]
+    ss = StringScanner.new(s).scan(/hello/)
+
+    assert_equal "hello", ss
   end
 end

@@ -253,6 +253,14 @@ class TestModule < Test::Unit::TestCase
     assert_operator(Math, :const_defined?, "PI")
     assert_not_operator(Math, :const_defined?, :IP)
     assert_not_operator(Math, :const_defined?, "IP")
+
+    # Test invalid symbol name
+    # [Bug #20245]
+    EnvUtil.under_gc_stress do
+      assert_raise(EncodingError) do
+        Math.const_defined?("\xC3")
+      end
+    end
   end
 
   def each_bad_constants(m, &b)
@@ -1469,7 +1477,7 @@ class TestModule < Test::Unit::TestCase
     end
 
     %w(object_id __send__ initialize).each do |n|
-      assert_in_out_err([], <<-INPUT, [], %r"warning: undefining `#{n}' may cause serious problems$")
+      assert_in_out_err([], <<-INPUT, [], %r"warning: undefining '#{n}' may cause serious problems$")
         $VERBOSE = false
         Class.new.instance_eval { undef_method(:#{n}) }
       INPUT
@@ -2870,6 +2878,7 @@ class TestModule < Test::Unit::TestCase
 
   def test_invalid_attr
     %W[
+      foo=
       foo?
       @foo
       @@foo
@@ -3154,6 +3163,19 @@ class TestModule < Test::Unit::TestCase
     end;
   end
 
+  def test_define_method_changes_visibility_with_existing_method_bug_19749
+    c = Class.new do
+      def a; end
+      private def b; end
+
+      define_method(:b, instance_method(:b))
+      private
+      define_method(:a, instance_method(:a))
+    end
+    assert_equal([:b], c.public_instance_methods(false))
+    assert_equal([:a], c.private_instance_methods(false))
+  end
+
   def test_define_method_with_unbound_method
     # Passing an UnboundMethod to define_method succeeds if it is from an ancestor
     assert_nothing_raised do
@@ -3291,6 +3313,47 @@ class TestModule < Test::Unit::TestCase
     CODE
   end
 
+  def test_complemented_method_entry_memory_leak
+    # [Bug #19894] [Bug #19896]
+    assert_no_memory_leak([], <<~PREP, <<~CODE, rss: true)
+      code = proc do
+        $c = Class.new do
+          def foo; end
+        end
+
+        $m = Module.new do
+          refine $c do
+            def foo; end
+          end
+        end
+
+        Class.new do
+          using $m
+
+          def initialize
+            o = $c.new
+            o.method(:foo).unbind
+          end
+        end.new
+      end
+      1_000.times(&code)
+    PREP
+      300_000.times(&code)
+    CODE
+  end
+
+  def test_module_clone_memory_leak
+    # [Bug #19901]
+    assert_no_memory_leak([], <<~PREP, <<~CODE, rss: true)
+      code = proc do
+        Module.new.clone
+      end
+      1_000.times(&code)
+    PREP
+      1_000_000.times(&code)
+    CODE
+  end
+
   private
 
   def assert_top_method_is_private(method)
@@ -3298,7 +3361,7 @@ class TestModule < Test::Unit::TestCase
       methods = singleton_class.private_instance_methods(false)
       assert_include(methods, :#{method}, ":#{method} should be private")
 
-      assert_raise_with_message(NoMethodError, /^private method `#{method}' called for /) {
+      assert_raise_with_message(NoMethodError, /^private method '#{method}' called for /) {
         recv = self
         recv.#{method}
       }

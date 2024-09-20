@@ -171,15 +171,9 @@ module RubyVM::RJIT # :nodoc: all
       me_addr == 0 ? nil : rb_method_entry_t.new(me_addr)
     end
 
-    def rb_shape_transition_shape_capa(shape, new_capacity)
+    def rb_shape_get_next_no_warnings(shape, obj, id)
       _shape = shape.to_i
-      shape_addr = Primitive.cexpr! 'SIZET2NUM((size_t)rb_shape_transition_shape_capa((rb_shape_t *)NUM2SIZET(_shape), NUM2UINT(new_capacity)))'
-      rb_shape_t.new(shape_addr)
-    end
-
-    def rb_shape_get_next(shape, obj, id)
-      _shape = shape.to_i
-      shape_addr = Primitive.cexpr! 'SIZET2NUM((size_t)rb_shape_get_next((rb_shape_t *)NUM2SIZET(_shape), obj, (ID)NUM2SIZET(id)))'
+      shape_addr = Primitive.cexpr! 'SIZET2NUM((size_t)rb_shape_get_next_no_warnings((rb_shape_t *)NUM2SIZET(_shape), obj, (ID)NUM2SIZET(id)))'
       rb_shape_t.new(shape_addr)
     end
 
@@ -332,6 +326,10 @@ module RubyVM::RJIT # :nodoc: all
     def RCLASS_ORIGIN(klass)
       Primitive.cexpr! 'RCLASS_ORIGIN(klass)'
     end
+
+    def RCLASS_SINGLETON_P(klass)
+      Primitive.cexpr! 'RCLASS_SINGLETON_P(klass)'
+    end
   end
 
   #
@@ -370,7 +368,6 @@ module RubyVM::RJIT # :nodoc: all
   C::BOP_OR = Primitive.cexpr! %q{ SIZET2NUM(BOP_OR) }
   C::BOP_PLUS = Primitive.cexpr! %q{ SIZET2NUM(BOP_PLUS) }
   C::BUILTIN_ATTR_LEAF = Primitive.cexpr! %q{ SIZET2NUM(BUILTIN_ATTR_LEAF) }
-  C::BUILTIN_ATTR_NO_GC = Primitive.cexpr! %q{ SIZET2NUM(BUILTIN_ATTR_NO_GC) }
   C::HASH_REDEFINED_OP_FLAG = Primitive.cexpr! %q{ SIZET2NUM(HASH_REDEFINED_OP_FLAG) }
   C::INTEGER_REDEFINED_OP_FLAG = Primitive.cexpr! %q{ SIZET2NUM(INTEGER_REDEFINED_OP_FLAG) }
   C::INVALID_SHAPE_ID = Primitive.cexpr! %q{ SIZET2NUM(INVALID_SHAPE_ID) }
@@ -399,7 +396,6 @@ module RubyVM::RJIT # :nodoc: all
   C::RUBY_FLONUM_FLAG = Primitive.cexpr! %q{ SIZET2NUM(RUBY_FLONUM_FLAG) }
   C::RUBY_FLONUM_MASK = Primitive.cexpr! %q{ SIZET2NUM(RUBY_FLONUM_MASK) }
   C::RUBY_FL_FREEZE = Primitive.cexpr! %q{ SIZET2NUM(RUBY_FL_FREEZE) }
-  C::RUBY_FL_SINGLETON = Primitive.cexpr! %q{ SIZET2NUM(RUBY_FL_SINGLETON) }
   C::RUBY_IMMEDIATE_MASK = Primitive.cexpr! %q{ SIZET2NUM(RUBY_IMMEDIATE_MASK) }
   C::RUBY_SPECIAL_SHIFT = Primitive.cexpr! %q{ SIZET2NUM(RUBY_SPECIAL_SHIFT) }
   C::RUBY_SYMBOL_FLAG = Primitive.cexpr! %q{ SIZET2NUM(RUBY_SYMBOL_FLAG) }
@@ -412,11 +408,9 @@ module RubyVM::RJIT # :nodoc: all
   C::RUBY_T_OBJECT = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_OBJECT) }
   C::RUBY_T_STRING = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_STRING) }
   C::RUBY_T_SYMBOL = Primitive.cexpr! %q{ SIZET2NUM(RUBY_T_SYMBOL) }
-  C::SHAPE_CAPACITY_CHANGE = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_CAPACITY_CHANGE) }
   C::SHAPE_FLAG_SHIFT = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_FLAG_SHIFT) }
   C::SHAPE_FROZEN = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_FROZEN) }
   C::SHAPE_ID_NUM_BITS = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_ID_NUM_BITS) }
-  C::SHAPE_INITIAL_CAPACITY = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_INITIAL_CAPACITY) }
   C::SHAPE_IVAR = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_IVAR) }
   C::SHAPE_MASK = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_MASK) }
   C::SHAPE_ROOT = Primitive.cexpr! %q{ SIZET2NUM(SHAPE_ROOT) }
@@ -426,6 +420,7 @@ module RubyVM::RJIT # :nodoc: all
   C::VM_CALL_ARGS_BLOCKARG = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_ARGS_BLOCKARG) }
   C::VM_CALL_ARGS_SPLAT = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_ARGS_SPLAT) }
   C::VM_CALL_FCALL = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_FCALL) }
+  C::VM_CALL_FORWARDING = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_FORWARDING) }
   C::VM_CALL_KWARG = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_KWARG) }
   C::VM_CALL_KW_SPLAT = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_KW_SPLAT) }
   C::VM_CALL_KW_SPLAT_MUT = Primitive.cexpr! %q{ SIZET2NUM(VM_CALL_KW_SPLAT_MUT) }
@@ -460,65 +455,22 @@ module RubyVM::RJIT # :nodoc: all
   C::VM_METHOD_TYPE_ZSUPER = Primitive.cexpr! %q{ SIZET2NUM(VM_METHOD_TYPE_ZSUPER) }
   C::VM_SPECIAL_OBJECT_VMCORE = Primitive.cexpr! %q{ SIZET2NUM(VM_SPECIAL_OBJECT_VMCORE) }
 
-  def C.block_type_iseq
-    Primitive.cexpr! %q{ SIZET2NUM(block_type_iseq) }
-  end
-
-  def C.idRespond_to_missing
-    Primitive.cexpr! %q{ SIZET2NUM(idRespond_to_missing) }
-  end
-
-  def C.imemo_callinfo
-    Primitive.cexpr! %q{ SIZET2NUM(imemo_callinfo) }
-  end
-
-  def C.imemo_iseq
-    Primitive.cexpr! %q{ SIZET2NUM(imemo_iseq) }
-  end
-
-  def C.rb_block_param_proxy
-    Primitive.cexpr! %q{ SIZET2NUM(rb_block_param_proxy) }
-  end
-
-  def C.rb_cArray
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cArray) }
-  end
-
-  def C.rb_cFalseClass
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cFalseClass) }
-  end
-
-  def C.rb_cFloat
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cFloat) }
-  end
-
-  def C.rb_cInteger
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cInteger) }
-  end
-
-  def C.rb_cNilClass
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cNilClass) }
-  end
-
-  def C.rb_cString
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cString) }
-  end
-
-  def C.rb_cSymbol
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cSymbol) }
-  end
-
-  def C.rb_cTrueClass
-    Primitive.cexpr! %q{ SIZET2NUM(rb_cTrueClass) }
-  end
-
-  def C.rb_mRubyVMFrozenCore
-    Primitive.cexpr! %q{ SIZET2NUM(rb_mRubyVMFrozenCore) }
-  end
-
-  def C.rb_rjit_global_events
-    Primitive.cexpr! %q{ SIZET2NUM(rb_rjit_global_events) }
-  end
+  def C.block_type_iseq = Primitive.cexpr!(%q{ SIZET2NUM(block_type_iseq) })
+  def C.idRespond_to_missing = Primitive.cexpr!(%q{ SIZET2NUM(idRespond_to_missing) })
+  def C.imemo_callinfo = Primitive.cexpr!(%q{ SIZET2NUM(imemo_callinfo) })
+  def C.imemo_iseq = Primitive.cexpr!(%q{ SIZET2NUM(imemo_iseq) })
+  def C.rb_block_param_proxy = Primitive.cexpr!(%q{ SIZET2NUM(rb_block_param_proxy) })
+  def C.rb_cArray = Primitive.cexpr!(%q{ SIZET2NUM(rb_cArray) })
+  def C.rb_cFalseClass = Primitive.cexpr!(%q{ SIZET2NUM(rb_cFalseClass) })
+  def C.rb_cFloat = Primitive.cexpr!(%q{ SIZET2NUM(rb_cFloat) })
+  def C.rb_cInteger = Primitive.cexpr!(%q{ SIZET2NUM(rb_cInteger) })
+  def C.rb_cNilClass = Primitive.cexpr!(%q{ SIZET2NUM(rb_cNilClass) })
+  def C.rb_cString = Primitive.cexpr!(%q{ SIZET2NUM(rb_cString) })
+  def C.rb_cSymbol = Primitive.cexpr!(%q{ SIZET2NUM(rb_cSymbol) })
+  def C.rb_cTrueClass = Primitive.cexpr!(%q{ SIZET2NUM(rb_cTrueClass) })
+  def C.rb_mRubyVMFrozenCore = Primitive.cexpr!(%q{ SIZET2NUM(rb_mRubyVMFrozenCore) })
+  def C.rb_rjit_global_events = Primitive.cexpr!(%q{ SIZET2NUM(rb_rjit_global_events) })
+  def C.rb_vm_insns_count = Primitive.cexpr!(%q{ SIZET2NUM(rb_vm_insns_count) })
 
   def C.rb_ary_clear
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_ary_clear) }
@@ -614,6 +566,10 @@ module RubyVM::RJIT # :nodoc: all
 
   def C.rb_hash_new_with_size
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_hash_new_with_size) }
+  end
+
+  def C.rb_hash_resurrect
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_hash_resurrect) }
   end
 
   def C.rb_ivar_defined
@@ -724,8 +680,20 @@ module RubyVM::RJIT # :nodoc: all
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_ic_hit_p) }
   end
 
+  def C.rb_vm_opt_newarray_hash
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_opt_newarray_hash) }
+  end
+
+  def C.rb_vm_opt_newarray_max
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_opt_newarray_max) }
+  end
+
   def C.rb_vm_opt_newarray_min
     Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_opt_newarray_min) }
+  end
+
+  def C.rb_vm_opt_newarray_pack
+    Primitive.cexpr! %q{ SIZET2NUM((size_t)rb_vm_opt_newarray_pack) }
   end
 
   def C.rb_vm_set_ivar_id
@@ -812,7 +780,7 @@ module RubyVM::RJIT # :nodoc: all
           ), Primitive.cexpr!("OFFSETOF(((struct RArray *)NULL)->as.heap, aux)")],
           ptr: [CType::Pointer.new { self.VALUE }, Primitive.cexpr!("OFFSETOF(((struct RArray *)NULL)->as.heap, ptr)")],
         ),
-        ary: CType::Pointer.new { self.VALUE },
+        ary: CType::Array.new { self.VALUE },
       ), Primitive.cexpr!("OFFSETOF((*((struct RArray *)NULL)), as)")],
     )
   end
@@ -840,7 +808,7 @@ module RubyVM::RJIT # :nodoc: all
           ivptr: [CType::Pointer.new { self.VALUE }, Primitive.cexpr!("OFFSETOF(((struct RObject *)NULL)->as.heap, ivptr)")],
           iv_index_tbl: [CType::Pointer.new { self.rb_id_table }, Primitive.cexpr!("OFFSETOF(((struct RObject *)NULL)->as.heap, iv_index_tbl)")],
         ),
-        ary: CType::Pointer.new { self.VALUE },
+        ary: CType::Array.new { self.VALUE },
       ), Primitive.cexpr!("OFFSETOF((*((struct RObject *)NULL)), as)")],
     )
   end
@@ -849,11 +817,11 @@ module RubyVM::RJIT # :nodoc: all
     @RString ||= CType::Struct.new(
       "RString", Primitive.cexpr!("SIZEOF(struct RString)"),
       basic: [self.RBasic, Primitive.cexpr!("OFFSETOF((*((struct RString *)NULL)), basic)")],
+      len: [CType::Immediate.parse("long"), Primitive.cexpr!("OFFSETOF((*((struct RString *)NULL)), len)")],
       as: [CType::Union.new(
         "", Primitive.cexpr!("SIZEOF(((struct RString *)NULL)->as)"),
         heap: CType::Struct.new(
           "", Primitive.cexpr!("SIZEOF(((struct RString *)NULL)->as.heap)"),
-          len: [CType::Immediate.parse("long"), Primitive.cexpr!("OFFSETOF(((struct RString *)NULL)->as.heap, len)")],
           ptr: [CType::Pointer.new { CType::Immediate.parse("char") }, Primitive.cexpr!("OFFSETOF(((struct RString *)NULL)->as.heap, ptr)")],
           aux: [CType::Union.new(
             "", Primitive.cexpr!("SIZEOF(((struct RString *)NULL)->as.heap.aux)"),
@@ -863,8 +831,7 @@ module RubyVM::RJIT # :nodoc: all
         ),
         embed: CType::Struct.new(
           "", Primitive.cexpr!("SIZEOF(((struct RString *)NULL)->as.embed)"),
-          len: [CType::Immediate.parse("long"), Primitive.cexpr!("OFFSETOF(((struct RString *)NULL)->as.embed, len)")],
-          ary: [CType::Pointer.new { CType::Immediate.parse("char") }, Primitive.cexpr!("OFFSETOF(((struct RString *)NULL)->as.embed, ary)")],
+          ary: [CType::Array.new { CType::Immediate.parse("char") }, Primitive.cexpr!("OFFSETOF(((struct RString *)NULL)->as.embed, ary)")],
         ),
       ), Primitive.cexpr!("OFFSETOF((*((struct RString *)NULL)), as)")],
     )
@@ -881,7 +848,7 @@ module RubyVM::RJIT # :nodoc: all
           len: [CType::Immediate.parse("long"), Primitive.cexpr!("OFFSETOF(((struct RStruct *)NULL)->as.heap, len)")],
           ptr: [CType::Pointer.new { self.VALUE }, Primitive.cexpr!("OFFSETOF(((struct RStruct *)NULL)->as.heap, ptr)")],
         ),
-        ary: CType::Pointer.new { self.VALUE },
+        ary: CType::Array.new { self.VALUE },
       ), Primitive.cexpr!("OFFSETOF((*((struct RStruct *)NULL)), as)")],
     )
   end
@@ -1026,6 +993,7 @@ module RubyVM::RJIT # :nodoc: all
     @rb_callinfo_kwarg ||= CType::Struct.new(
       "rb_callinfo_kwarg", Primitive.cexpr!("SIZEOF(struct rb_callinfo_kwarg)"),
       keyword_len: [CType::Immediate.parse("int"), Primitive.cexpr!("OFFSETOF((*((struct rb_callinfo_kwarg *)NULL)), keyword_len)")],
+      references: [CType::Immediate.parse("int"), Primitive.cexpr!("OFFSETOF((*((struct rb_callinfo_kwarg *)NULL)), references)")],
       keywords: [CType::Immediate.parse("void *"), Primitive.cexpr!("OFFSETOF((*((struct rb_callinfo_kwarg *)NULL)), keywords)")],
     )
   end
@@ -1044,6 +1012,10 @@ module RubyVM::RJIT # :nodoc: all
     )
   end
 
+  def C.rb_cfunc_t
+    @rb_cfunc_t ||= self.VALUE
+  end
+
   def C.rb_control_frame_t
     @rb_control_frame_t ||= CType::Struct.new(
       "rb_control_frame_struct", Primitive.cexpr!("SIZEOF(struct rb_control_frame_struct)"),
@@ -1053,7 +1025,6 @@ module RubyVM::RJIT # :nodoc: all
       self: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_control_frame_struct *)NULL)), self)")],
       ep: [CType::Pointer.new { self.VALUE }, Primitive.cexpr!("OFFSETOF((*((struct rb_control_frame_struct *)NULL)), ep)")],
       block_code: [CType::Immediate.parse("void *"), Primitive.cexpr!("OFFSETOF((*((struct rb_control_frame_struct *)NULL)), block_code)")],
-      __bp__: [CType::Pointer.new { self.VALUE }, Primitive.cexpr!("OFFSETOF((*((struct rb_control_frame_struct *)NULL)), __bp__)")],
       jit_return: [CType::Pointer.new { CType::Immediate.parse("void") }, Primitive.cexpr!("OFFSETOF((*((struct rb_control_frame_struct *)NULL)), jit_return)")],
     )
   end
@@ -1086,7 +1057,6 @@ module RubyVM::RJIT # :nodoc: all
       storage: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), storage)")],
       root_lep: [CType::Pointer.new { self.VALUE }, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), root_lep)")],
       root_svar: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), root_svar)")],
-      ensure_list: [CType::Pointer.new { self.rb_ensure_list_t }, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), ensure_list)")],
       trace_arg: [CType::Pointer.new { self.rb_trace_arg_struct }, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), trace_arg)")],
       errinfo: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), errinfo)")],
       passed_block_handler: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_execution_context_struct *)NULL)), passed_block_handler)")],
@@ -1125,6 +1095,10 @@ module RubyVM::RJIT # :nodoc: all
           ambiguous_param0: [CType::BitField.new(1, 7), 7],
           accepts_no_kwarg: [CType::BitField.new(1, 0), 8],
           ruby2_keywords: [CType::BitField.new(1, 1), 9],
+          anon_rest: [CType::BitField.new(1, 2), 10],
+          anon_kwrest: [CType::BitField.new(1, 3), 11],
+          use_block: [CType::BitField.new(1, 4), 12],
+          forwardable: [CType::BitField.new(1, 5), 13],
         ), Primitive.cexpr!("OFFSETOF(((struct rb_iseq_constant_body *)NULL)->param, flags)")],
         size: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF(((struct rb_iseq_constant_body *)NULL)->param, size)")],
         lead_num: [CType::Immediate.parse("int"), Primitive.cexpr!("OFFSETOF(((struct rb_iseq_constant_body *)NULL)->param, lead_num)")],
@@ -1160,6 +1134,7 @@ module RubyVM::RJIT # :nodoc: all
       ci_size: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), ci_size)")],
       stack_max: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), stack_max)")],
       builtin_attrs: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), builtin_attrs)")],
+      prism: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), prism)")],
       mark_bits: [CType::Union.new(
         "", Primitive.cexpr!("SIZEOF(((struct rb_iseq_constant_body *)NULL)->mark_bits)"),
         list: CType::Pointer.new { self.iseq_bits_t },
@@ -1167,8 +1142,8 @@ module RubyVM::RJIT # :nodoc: all
       ), Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), mark_bits)")],
       outer_variables: [CType::Pointer.new { self.rb_id_table }, Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), outer_variables)")],
       mandatory_only_iseq: [CType::Pointer.new { self.rb_iseq_t }, Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), mandatory_only_iseq)")],
-      jit_func: [self.rb_jit_func_t, Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), jit_func)")],
-      total_calls: [CType::Immediate.parse("unsigned long"), Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), total_calls)")],
+      jit_entry: [self.rb_jit_func_t, Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), jit_entry)")],
+      jit_entry_calls: [CType::Immediate.parse("unsigned long"), Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), jit_entry_calls)")],
       rjit_blocks: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_iseq_constant_body *)NULL)), rjit_blocks)"), true],
     )
   end
@@ -1248,7 +1223,7 @@ module RubyVM::RJIT # :nodoc: all
   def C.rb_method_cfunc_t
     @rb_method_cfunc_t ||= CType::Struct.new(
       "rb_method_cfunc_struct", Primitive.cexpr!("SIZEOF(struct rb_method_cfunc_struct)"),
-      func: [CType::Immediate.parse("void *"), Primitive.cexpr!("OFFSETOF((*((struct rb_method_cfunc_struct *)NULL)), func)")],
+      func: [self.rb_cfunc_t, Primitive.cexpr!("OFFSETOF((*((struct rb_method_cfunc_struct *)NULL)), func)")],
       invoker: [CType::Immediate.parse("void *"), Primitive.cexpr!("OFFSETOF((*((struct rb_method_cfunc_struct *)NULL)), invoker)")],
       argc: [CType::Immediate.parse("int"), Primitive.cexpr!("OFFSETOF((*((struct rb_method_cfunc_struct *)NULL)), argc)")],
     )
@@ -1259,9 +1234,9 @@ module RubyVM::RJIT # :nodoc: all
       "rb_method_definition_struct", Primitive.cexpr!("SIZEOF(struct rb_method_definition_struct)"),
       type: [CType::BitField.new(4, 0), 0],
       iseq_overload: [CType::BitField.new(1, 4), 4],
-      alias_count: [CType::BitField.new(27, 5), 5],
-      complemented_count: [CType::BitField.new(28, 0), 32],
-      no_redef_warning: [CType::BitField.new(1, 4), 60],
+      no_redef_warning: [CType::BitField.new(1, 5), 5],
+      aliased: [CType::BitField.new(1, 6), 6],
+      reference_count: [CType::BitField.new(28, 0), 32],
       body: [CType::Union.new(
         "", Primitive.cexpr!("SIZEOF(((struct rb_method_definition_struct *)NULL)->body)"),
         iseq: self.rb_method_iseq_t,
@@ -1319,20 +1294,20 @@ module RubyVM::RJIT # :nodoc: all
     @rb_rjit_options ||= CType::Struct.new(
       "rb_rjit_options", Primitive.cexpr!("SIZEOF(struct rb_rjit_options)"),
       on: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), on)")],
-      call_threshold: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), call_threshold)")],
       exec_mem_size: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), exec_mem_size)")],
+      call_threshold: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), call_threshold)")],
       stats: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), stats)")],
+      disable: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), disable)")],
+      trace: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), trace)")],
       trace_exits: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), trace_exits)")],
       dump_disasm: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), dump_disasm)")],
       verify_ctx: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), verify_ctx)")],
-      pause: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_options *)NULL)), pause)")],
     )
   end
 
   def C.rb_rjit_runtime_counters
     @rb_rjit_runtime_counters ||= CType::Struct.new(
       "rb_rjit_runtime_counters", Primitive.cexpr!("SIZEOF(struct rb_rjit_runtime_counters)"),
-      vm_insns_count: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), vm_insns_count)")],
       rjit_insns_count: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), rjit_insns_count)")],
       send_args_splat_kw_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat_kw_splat)")],
       send_args_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_args_splat)")],
@@ -1382,6 +1357,7 @@ module RubyVM::RJIT # :nodoc: all
       send_iseq_has_rest: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_has_rest)")],
       send_iseq_block_arg0_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_block_arg0_splat)")],
       send_iseq_kw_call: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_kw_call)")],
+      send_iseq_kw_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_kw_splat)")],
       send_iseq_splat: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_splat)")],
       send_iseq_has_rest_and_optional: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_has_rest_and_optional)")],
       send_iseq_arity_error: [CType::Immediate.parse("size_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_rjit_runtime_counters *)NULL)), send_iseq_arity_error)")],
@@ -1472,6 +1448,7 @@ module RubyVM::RJIT # :nodoc: all
       type: [CType::Immediate.parse("uint8_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_shape *)NULL)), type)")],
       size_pool_index: [CType::Immediate.parse("uint8_t"), Primitive.cexpr!("OFFSETOF((*((struct rb_shape *)NULL)), size_pool_index)")],
       parent_id: [self.shape_id_t, Primitive.cexpr!("OFFSETOF((*((struct rb_shape *)NULL)), parent_id)")],
+      ancestor_index: [CType::Pointer.new { self.redblack_node_t }, Primitive.cexpr!("OFFSETOF((*((struct rb_shape *)NULL)), ancestor_index)")],
     )
   end
 
@@ -1489,6 +1466,7 @@ module RubyVM::RJIT # :nodoc: all
       nt: [CType::Pointer.new { self.rb_native_thread }, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), nt)")],
       ec: [CType::Pointer.new { self.rb_execution_context_t }, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), ec)")],
       sched: [self.rb_thread_sched_item, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), sched)")],
+      mn_schedulable: [self._Bool, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), mn_schedulable)")],
       serial: [self.rb_atomic_t, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), serial)")],
       last_status: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), last_status)")],
       calling: [CType::Pointer.new { self.rb_calling_info }, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), calling)")],
@@ -1526,16 +1504,23 @@ module RubyVM::RJIT # :nodoc: all
       scheduler: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), scheduler)")],
       blocking: [CType::Immediate.parse("unsigned int"), Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), blocking)")],
       name: [self.VALUE, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), name)")],
+      specific_storage: [CType::Pointer.new { CType::Pointer.new { CType::Immediate.parse("void") } }, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), specific_storage)")],
       ext_config: [self.rb_ext_config, Primitive.cexpr!("OFFSETOF((*((struct rb_thread_struct *)NULL)), ext_config)")],
     )
   end
 
   def C.VALUE
-    @VALUE ||= CType::Immediate.find(Primitive.cexpr!("SIZEOF(VALUE)"), Primitive.cexpr!("SIGNED_TYPE_P(VALUE)"))
+    @VALUE ||= CType::Immediate.find(
+      Primitive.cexpr!("SIZEOF(VALUE)"),
+      Primitive.cexpr!("SIGNED_TYPE_P(VALUE)"),
+    )
   end
 
   def C.shape_id_t
-    @shape_id_t ||= CType::Immediate.find(Primitive.cexpr!("SIZEOF(shape_id_t)"), Primitive.cexpr!("SIGNED_TYPE_P(shape_id_t)"))
+    @shape_id_t ||= CType::Immediate.find(
+      Primitive.cexpr!("SIZEOF(shape_id_t)"),
+      Primitive.cexpr!("SIGNED_TYPE_P(shape_id_t)"),
+    )
   end
 
   def C.rb_id_table
@@ -1574,10 +1559,6 @@ module RubyVM::RJIT # :nodoc: all
     CType::Stub.new(:rb_fiber_t)
   end
 
-  def C.rb_ensure_list_t
-    CType::Stub.new(:rb_ensure_list_t)
-  end
-
   def C.rb_trace_arg_struct
     CType::Stub.new(:rb_trace_arg_struct)
   end
@@ -1596,6 +1577,10 @@ module RubyVM::RJIT # :nodoc: all
 
   def C.rb_snum_t
     CType::Stub.new(:rb_snum_t)
+  end
+
+  def C._Bool
+    CType::Bool.new
   end
 
   def C.iseq_bits_t
@@ -1626,8 +1611,8 @@ module RubyVM::RJIT # :nodoc: all
     CType::Stub.new(:rb_method_refined_t)
   end
 
-  def C._Bool
-    CType::Bool.new
+  def C.redblack_node_t
+    CType::Stub.new(:redblack_node_t)
   end
 
   def C.ccan_list_node

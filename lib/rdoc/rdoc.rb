@@ -119,7 +119,7 @@ class RDoc::RDoc
   # +files+.
 
   def gather_files files
-    files = ["."] if files.empty?
+    files = [@options.root.to_s] if files.empty?
 
     file_list = normalized_file_list files, true, @options.exclude
 
@@ -356,7 +356,7 @@ option)
 
     top_level = @store.add_file filename, relative_name: relative_path.to_s
 
-    parser = RDoc::Parser.for top_level, filename, content, @options, @stats
+    parser = RDoc::Parser.for top_level, content, @options, @stats
 
     return unless parser
 
@@ -544,7 +544,7 @@ end
 begin
   require 'rubygems'
 
-  rdoc_extensions = Gem.find_files 'rdoc/discover'
+  rdoc_extensions = Gem.find_latest_files 'rdoc/discover'
 
   rdoc_extensions.each do |extension|
     begin

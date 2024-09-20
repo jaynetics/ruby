@@ -289,7 +289,13 @@ class TestGemSourceGit < Gem::TestCase
   end
 
   def test_uri
-    assert_equal URI(@repository), @source.uri
+    assert_equal Gem::URI(@repository), @source.uri
+  end
+
+  def test_pretty_print
+    assert_equal "#<Gem::Source::Git[Git: \n" \
+                 "   #{@repository}\n" \
+                 "   HEAD]>\n", @source.pretty_inspect
   end
 
   def test_uri_hash

@@ -20,7 +20,7 @@
 module RubyVM::AbstractSyntaxTree
 
   #  call-seq:
-  #     RubyVM::AbstractSyntaxTree.parse(string, keep_script_lines: false, error_tolerant: false, keep_tokens: false) -> RubyVM::AbstractSyntaxTree::Node
+  #     RubyVM::AbstractSyntaxTree.parse(string, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false) -> RubyVM::AbstractSyntaxTree::Node
   #
   #  Parses the given _string_ into an abstract syntax tree,
   #  returning the root node of that tree.
@@ -55,12 +55,12 @@ module RubyVM::AbstractSyntaxTree
   #
   #  Note that parsing continues even after the errored expression.
   #
-  def self.parse string, keep_script_lines: false, error_tolerant: false, keep_tokens: false
+  def self.parse string, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false
     Primitive.ast_s_parse string, keep_script_lines, error_tolerant, keep_tokens
   end
 
   #  call-seq:
-  #     RubyVM::AbstractSyntaxTree.parse_file(pathname, keep_script_lines: false, error_tolerant: false, keep_tokens: false) -> RubyVM::AbstractSyntaxTree::Node
+  #     RubyVM::AbstractSyntaxTree.parse_file(pathname, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false) -> RubyVM::AbstractSyntaxTree::Node
   #
   #   Reads the file from _pathname_, then parses it like ::parse,
   #   returning the root node of the abstract syntax tree.
@@ -72,13 +72,13 @@ module RubyVM::AbstractSyntaxTree
   #     # => #<RubyVM::AbstractSyntaxTree::Node:SCOPE@1:0-31:3>
   #
   #   See ::parse for explanation of keyword argument meaning and usage.
-  def self.parse_file pathname, keep_script_lines: false, error_tolerant: false, keep_tokens: false
+  def self.parse_file pathname, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false
     Primitive.ast_s_parse_file pathname, keep_script_lines, error_tolerant, keep_tokens
   end
 
   #  call-seq:
-  #     RubyVM::AbstractSyntaxTree.of(proc, keep_script_lines: false, error_tolerant: false, keep_tokens: false)   -> RubyVM::AbstractSyntaxTree::Node
-  #     RubyVM::AbstractSyntaxTree.of(method, keep_script_lines: false, error_tolerant: false, keep_tokens: false) -> RubyVM::AbstractSyntaxTree::Node
+  #     RubyVM::AbstractSyntaxTree.of(proc, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false)   -> RubyVM::AbstractSyntaxTree::Node
+  #     RubyVM::AbstractSyntaxTree.of(method, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false) -> RubyVM::AbstractSyntaxTree::Node
   #
   #   Returns AST nodes of the given _proc_ or _method_.
   #
@@ -93,7 +93,7 @@ module RubyVM::AbstractSyntaxTree
   #     # => #<RubyVM::AbstractSyntaxTree::Node:SCOPE@1:0-3:3>
   #
   #   See ::parse for explanation of keyword argument meaning and usage.
-  def self.of body, keep_script_lines: false, error_tolerant: false, keep_tokens: false
+  def self.of body, keep_script_lines: RubyVM.keep_script_lines, error_tolerant: false, keep_tokens: false
     Primitive.ast_s_of body, keep_script_lines, error_tolerant, keep_tokens
   end
 
@@ -265,12 +265,69 @@ module RubyVM::AbstractSyntaxTree
       lines = script_lines
       if lines
         lines = lines[first_lineno - 1 .. last_lineno - 1]
-        lines[-1] = lines[-1][0...last_column]
-        lines[0] = lines[0][first_column..-1]
+        lines[-1] = lines[-1].byteslice(0...last_column)
+        lines[0] = lines[0].byteslice(first_column..-1)
         lines.join
       else
         nil
       end
+    end
+
+    #  call-seq:
+    #     node.locations -> array
+    #
+    #  Returns location objects associated with the AST node.
+    #  The returned array contains RubyVM::AbstractSyntaxTree::Location.
+    def locations
+      Primitive.ast_node_locations
+    end
+  end
+
+  # RubyVM::AbstractSyntaxTree::Location instances are created by
+  # RubyVM::AbstractSyntaxTree#locations.
+  #
+  # This class is MRI specific.
+  #
+  class Location
+
+    #  call-seq:
+    #     location.first_lineno -> integer
+    #
+    #  The line number in the source code where this AST's text began.
+    def first_lineno
+      Primitive.ast_location_first_lineno
+    end
+
+    #  call-seq:
+    #     location.first_column -> integer
+    #
+    #  The column number in the source code where this AST's text began.
+    def first_column
+      Primitive.ast_location_first_column
+    end
+
+    #  call-seq:
+    #     location.last_lineno -> integer
+    #
+    #  The line number in the source code where this AST's text ended.
+    def last_lineno
+      Primitive.ast_location_last_lineno
+    end
+
+    #  call-seq:
+    #     location.last_column -> integer
+    #
+    #  The column number in the source code where this AST's text ended.
+    def last_column
+      Primitive.ast_location_last_column
+    end
+
+    #  call-seq:
+    #     location.inspect -> string
+    #
+    #  Returns debugging information about this location as a string.
+    def inspect
+      Primitive.ast_location_inspect
     end
   end
 end

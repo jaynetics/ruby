@@ -76,11 +76,6 @@ class Gem::RequestSet::Lockfile
     @dependencies  = dependencies
     @gem_deps_file = File.expand_path(gem_deps_file)
     @gem_deps_dir  = File.dirname(@gem_deps_file)
-
-    if RUBY_VERSION < "2.7"
-      @gem_deps_file.untaint unless gem_deps_file.tainted?
-    end
-
     @platforms = []
   end
 
@@ -109,7 +104,7 @@ class Gem::RequestSet::Lockfile
       requests.sort_by(&:name).each do |request|
         next if request.spec.name == "bundler"
         platform = "-#{request.spec.platform}" unless
-          Gem::Platform::RUBY == request.spec.platform
+          request.spec.platform == Gem::Platform::RUBY
 
         out << "    #{request.name} (#{request.version}#{platform})"
 

@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #include <fiddle.h>
 
 VALUE mFiddle;
@@ -357,6 +359,12 @@ Init_fiddle(void)
      */
     rb_define_const(mFiddleTypes, "UINTPTR_T",  INT2NUM(TYPE_UINTPTR_T));
 
+    /* Document-const: Fiddle::Types::BOOL
+     *
+     * C type - bool
+     */
+    rb_define_const(mFiddleTypes, "BOOL" , INT2NUM(TYPE_BOOL));
+
     /* Document-const: ALIGN_VOIDP
      *
      * The alignment size of a void*
@@ -460,6 +468,12 @@ Init_fiddle(void)
      * The alignment size of a uintptr_t
      */
     rb_define_const(mFiddle, "ALIGN_UINTPTR_T", INT2NUM(ALIGN_OF(uintptr_t)));
+
+    /* Document-const: ALIGN_BOOL
+     *
+     * The alignment size of a bool
+     */
+    rb_define_const(mFiddle, "ALIGN_BOOL", INT2NUM(ALIGN_OF(bool)));
 
     /* Document-const: WINDOWS
      *
@@ -635,6 +649,12 @@ Init_fiddle(void)
      */
     rb_define_const(mFiddle, "SIZEOF_CONST_STRING", INT2NUM(sizeof(const char*)));
 
+    /* Document-const: SIZEOF_BOOL
+     *
+     * size of a bool
+     */
+    rb_define_const(mFiddle, "SIZEOF_BOOL", INT2NUM(sizeof(bool)));
+
     /* Document-const: RUBY_FREE
      *
      * Address of the ruby_xfree() function
@@ -689,4 +709,3 @@ Init_fiddle(void)
     Init_fiddle_memory_view();
 #endif
 }
-/* vim: set noet sws=4 sw=4: */

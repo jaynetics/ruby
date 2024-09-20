@@ -238,6 +238,40 @@ module RubyVM::RJIT
       end
     end
 
+    # Basically Immediate but without #* to skip auto-dereference of structs.
+    class Array
+      attr_reader :type
+
+      # @param addr [Integer]
+      # @param type [Class] RubyVM::RJIT::CType::*
+      def initialize(addr, type)
+        @addr = addr
+        @type = type
+      end
+
+      # Array access
+      def [](index)
+        @type.new(@addr)[index]
+      end
+
+      # Array set
+      # @param index [Integer]
+      # @param value [Integer, RubyVM::RJIT::CPointer::Struct] an address itself or an object that return an address with to_i
+      def []=(index, value)
+        @type.new(@addr)[index] = value
+      end
+
+      private
+
+      def self.define(block)
+        Class.new(self) do
+          define_method(:initialize) do |addr|
+            super(addr, block.call)
+          end
+        end
+      end
+    end
+
     class Pointer
       attr_reader :type
 
@@ -338,7 +372,7 @@ module RubyVM::RJIT
 
     # Give a name to a dynamic CPointer class to see it on inspect
     def self.with_class_name(prefix, name, cache: false, &block)
-      return block.call if name.empty?
+      return block.call if !name.nil? && name.empty?
 
       # Use a cached result only if cache: true
       class_name = "#{prefix}_#{name}"

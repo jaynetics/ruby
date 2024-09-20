@@ -2,9 +2,9 @@
 
 Ruby supports a few native build platforms for Windows.
 
-* mswin: Build using Microsoft Visual C++ compiler
+* mswin: Build using Microsoft Visual C++ compiler with vcruntimeXXX.dll
 * mingw-msvcrt: Build using compiler for Mingw with msvcrtXX.dll
-* mingw-ucrt: Build using compiler for Mingw with vcruntime.dll
+* mingw-ucrt: Build using compiler for Mingw with Windows Universal CRT
 
 ## Building Ruby using Mingw with UCRT
 
@@ -19,7 +19,7 @@ Ruby core development can be done either in Windows `cmd` like:
 ```
 ridk enable ucrt64
 
-pacman -S --needed bison %MINGW_PACKAGE_PREFIX%-openssl %MINGW_PACKAGE_PREFIX%-libyaml %MINGW_PACKAGE_PREFIX%-readline
+pacman -S --needed %MINGW_PACKAGE_PREFIX%-openssl %MINGW_PACKAGE_PREFIX%-libyaml %MINGW_PACKAGE_PREFIX%-libffi
 
 cd c:\
 mkdir work
@@ -38,7 +38,7 @@ or in MSYS2 `bash` like:
 ridk enable ucrt64
 bash
 
-pacman -S --needed bison $MINGW_PACKAGE_PREFIX-openssl $MINGW_PACKAGE_PREFIX-libyaml $MINGW_PACKAGE_PREFIX-readline
+pacman -S --needed $MINGW_PACKAGE_PREFIX-openssl $MINGW_PACKAGE_PREFIX-libyaml $MINGW_PACKAGE_PREFIX-libffi
 
 cd /c/
 mkdir work
@@ -59,9 +59,9 @@ make
 
 ### Requirement
 
-1.  Windows 7 or later.
+1.  Windows 10/Windows Server 2016 or later.
 
-2.  Visual C++ 12.0 (2013) or later.
+2.  Visual C++ 14.0 (2015) or later.
 
     **Note** if you want to build x64 version, use native compiler for
     x64.
@@ -78,21 +78,22 @@ make
     * dumpbin
 
 4.  If you want to build from GIT source, following commands are required.
-    * bison
+    * git
     * patch
     * sed
-    * ruby 2.0 or later
+    * ruby 3.0 or later
 
     You can use [scoop](https://scoop.sh/) to install them like:
 
     ```
-    scoop install git ruby winflexbison sed patch
+    scoop install git patch sed ruby
     ```
 
-5. You need to install required libraries using [vcpkg](https://vcpkg.io/) like:
+5.  You need to install required libraries using [vcpkg](https://vcpkg.io/) on
+    directory of ruby repository like:
 
     ```
-    vcpkg --triplet x64-windows install openssl libffi libyaml zlib
+    vcpkg --triplet x64-windows install
     ```
 
 6.  Enable Command Extension of your command line.  It's the default behavior
@@ -118,15 +119,18 @@ make
     executable without console window if also you want.
 
 3.  You need specify vcpkg directory to use `--with-opt-dir`
-    option like `configure --with-opt-dir=C:\vcpkg\installed\x64-windows`
+    option like `win32\configure.bat --with-opt-dir=vcpkg_installed\x64-windows`
 
 4.  Run `nmake up` if you are building from GIT source.
 
 5.  Run `nmake`
 
-6.  Run `nmake check`
+6.  Run `nmake prepare-vcpkg` if you need to copy
+    vcpkg installed libraries like `libssl-3-x64.dll` to the build directory.
 
-7.  Run `nmake install`
+7.  Run `nmake check`
+
+8.  Run `nmake install`
 
 ### Build examples
 
@@ -209,6 +213,18 @@ of `!INCLUDE` directives of `NMAKE`.
 You can build ruby in any directory including the source directory,
 except `win32` directory in the source directory.
 This is restriction originating in the path search method of `NMAKE`.
+
+### Dependency management
+
+Ruby uses [vcpkg](https://vcpkg.io/) to manage dependencies on mswin platform.
+
+You can update and install it under the build directory like:
+
+```
+nmake update-vcpkg # Update baseline version of vcpkg
+nmake install-vcpkg # Install vcpkg from build directory
+```
+
 
 ## Icons
 

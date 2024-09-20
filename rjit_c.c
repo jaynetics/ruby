@@ -151,7 +151,7 @@ mprotect_exec(rb_execution_context_t *ec, VALUE self, VALUE rb_mem_block, VALUE 
     if (mem_size == 0) return Qfalse; // Some platforms return an error for mem_size 0.
 
     if (mprotect(mem_block, mem_size, PROT_READ | PROT_EXEC)) {
-        rb_bug("Couldn't make JIT page (%p, %lu bytes) executable, errno: %s\n",
+        rb_bug("Couldn't make JIT page (%p, %lu bytes) executable, errno: %s",
             mem_block, (unsigned long)mem_size, strerror(errno));
     }
     return Qtrue;
@@ -509,7 +509,7 @@ rjit_for_each_iseq(rb_execution_context_t *ec, VALUE self, VALUE block)
     return Qnil;
 }
 
-// bindgen funcs
+// bindgen references
 extern ID rb_get_symbol_id(VALUE name);
 extern VALUE rb_fix_aref(VALUE fix, VALUE idx);
 extern VALUE rb_str_getbyte(VALUE str, VALUE index);
@@ -517,6 +517,9 @@ extern VALUE rb_vm_concat_array(VALUE ary1, VALUE ary2st);
 extern VALUE rb_vm_get_ev_const(rb_execution_context_t *ec, VALUE orig_klass, ID id, VALUE allow_nil);
 extern VALUE rb_vm_getclassvariable(const rb_iseq_t *iseq, const rb_control_frame_t *cfp, ID id, ICVARC ic);
 extern VALUE rb_vm_opt_newarray_min(rb_execution_context_t *ec, rb_num_t num, const VALUE *ptr);
+extern VALUE rb_vm_opt_newarray_max(rb_execution_context_t *ec, rb_num_t num, const VALUE *ptr);
+extern VALUE rb_vm_opt_newarray_hash(rb_execution_context_t *ec, rb_num_t num, const VALUE *ptr);
+extern VALUE rb_vm_opt_newarray_pack(rb_execution_context_t *ec, rb_num_t num, const VALUE *ptr, VALUE fmt);
 extern VALUE rb_vm_splat_array(VALUE flag, VALUE array);
 extern bool rb_simple_iseq_p(const rb_iseq_t *iseq);
 extern bool rb_vm_defined(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, rb_num_t op_type, VALUE obj, VALUE v);
@@ -533,6 +536,7 @@ extern VALUE rb_vm_set_ivar_id(VALUE obj, ID id, VALUE val);
 extern VALUE rb_ary_unshift_m(int argc, VALUE *argv, VALUE ary);
 extern void* rb_rjit_entry_stub_hit(VALUE branch_stub);
 extern void* rb_rjit_branch_stub_hit(VALUE branch_stub, int sp_offset, int target0_p);
+extern uint64_t rb_vm_insns_count;
 
 #include "rjit_c.rbinc"
 

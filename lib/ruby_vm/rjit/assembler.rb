@@ -13,7 +13,7 @@ module RubyVM::RJIT
   C_ARGS = [:rdi, :rsi, :rdx, :rcx, :r8, :r9]
   C_RET  = :rax
 
-  # https://www.intel.com/content/dam/develop/public/us/en/documents/325383-sdm-vol-2abcd.pdf
+  # https://cdrdv2.intel.com/v1/dl/getContent/671110
   # Mostly an x86_64 assembler, but this also has some stuff that is useful for any architecture.
   class Assembler
     # rel8 jumps are made with labels
@@ -151,6 +151,16 @@ module RubyVM::RJIT
           opcode: 0x23,
           mod_rm: ModRM[mod: Mod01, reg: dst_reg, rm: src_reg],
           disp: imm8(src_disp),
+        )
+      # AND r64, r/m64 (Mod 10: [reg]+disp32)
+      in [R64 => dst_reg, QwordPtr[R64 => src_reg, IMM32 => src_disp]]
+        # REX.W + 23 /r
+        # RM: Operand 1: ModRM:reg (r, w), Operand 2: ModRM:r/m (r)
+        insn(
+          prefix: REX_W,
+          opcode: 0x23,
+          mod_rm: ModRM[mod: Mod10, reg: dst_reg, rm: src_reg],
+          disp: imm32(src_disp),
         )
       end
     end
@@ -327,6 +337,17 @@ module RubyVM::RJIT
           mod_rm: ModRM[mod: Mod01, reg: 7, rm: left_reg],
           disp: left_disp,
           imm: imm8(right_imm),
+        )
+      # CMP r/m64, imm32 (Mod 01: [reg]+disp8)
+      in [QwordPtr[R64 => left_reg, IMM8 => left_disp], IMM32 => right_imm]
+        # REX.W + 81 /7 id
+        # MI: Operand 1: ModRM:r/m (r), Operand 2: imm8/16/32
+        insn(
+          prefix: REX_W,
+          opcode: 0x81,
+          mod_rm: ModRM[mod: Mod01, reg: 7, rm: left_reg],
+          disp: left_disp,
+          imm: imm32(right_imm),
         )
       # CMP r/m64, imm8 (Mod 10: [reg]+disp32)
       in [QwordPtr[R64 => left_reg, IMM32 => left_disp], IMM8 => right_imm]
@@ -724,6 +745,16 @@ module RubyVM::RJIT
           opcode: 0x0b,
           mod_rm: ModRM[mod: Mod01, reg: dst_reg, rm: src_reg],
           disp: imm8(src_disp),
+        )
+      # OR r64, r/m64 (Mod 10: [reg]+disp32)
+      in [R64 => dst_reg, QwordPtr[R64 => src_reg, IMM32 => src_disp]]
+        # REX.W + 0B /r
+        # RM: Operand 1: ModRM:reg (r, w), Operand 2: ModRM:r/m (r)
+        insn(
+          prefix: REX_W,
+          opcode: 0x0b,
+          mod_rm: ModRM[mod: Mod10, reg: dst_reg, rm: src_reg],
+          disp: imm32(src_disp),
         )
       end
     end

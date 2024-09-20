@@ -24,10 +24,14 @@ module Bundler
 
           name = dep.name
 
-          @packages[name] = Package.new(name, dep_platforms, **options.merge(:dependency => dep))
+          @packages[name] = Package.new(name, dep_platforms, **options.merge(dependency: dep))
 
           dep
         end.compact
+      end
+
+      def specs_compatible_with(result)
+        @base.specs_compatible_with(result)
       end
 
       def [](name)
@@ -65,6 +69,12 @@ module Bundler
       def include_prereleases(names)
         names.each do |name|
           get_package(name).consider_prereleases!
+        end
+      end
+
+      def include_remote_specs(names)
+        names.each do |name|
+          get_package(name).consider_remote_versions!
         end
       end
 

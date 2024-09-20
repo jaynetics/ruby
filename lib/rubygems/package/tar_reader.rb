@@ -14,11 +14,6 @@ class Gem::Package::TarReader
   include Enumerable
 
   ##
-  # Raised if the tar IO is not seekable
-
-  class UnexpectedEOF < StandardError; end
-
-  ##
   # Creates a new TarReader on +io+ and yields it to the block, if given.
 
   def self.new(io)
@@ -57,7 +52,14 @@ class Gem::Package::TarReader
     return enum_for __method__ unless block_given?
 
     until @io.eof? do
-      header = Gem::Package::TarHeader.from @io
+      begin
+        header = Gem::Package::TarHeader.from @io
+      rescue ArgumentError => e
+        # Specialize only exceptions from Gem::Package::TarHeader.strict_oct
+        raise e unless e.message.match?(/ is not an octal string$/)
+        raise Gem::Package::TarInvalidError, e.message
+      end
+
       return if header.empty?
       entry = Gem::Package::TarReader::Entry.new header, @io
       yield entry

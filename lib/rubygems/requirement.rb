@@ -13,8 +13,8 @@ class Gem::Requirement
   OPS = { # :nodoc:
     "=" => lambda {|v, r| v == r },
     "!=" => lambda {|v, r| v != r },
-    ">" => lambda {|v, r| v >  r },
-    "<" => lambda {|v, r| v <  r },
+    ">" => lambda {|v, r| v > r },
+    "<" => lambda {|v, r| v < r },
     ">=" => lambda {|v, r| v >= r },
     "<=" => lambda {|v, r| v <= r },
     "~>" => lambda {|v, r| v >= r && v.release < r.bump },
@@ -23,12 +23,12 @@ class Gem::Requirement
   SOURCE_SET_REQUIREMENT = Struct.new(:for_lockfile).new "!" # :nodoc:
 
   quoted = OPS.keys.map {|k| Regexp.quote k }.join "|"
-  PATTERN_RAW = "\\s*(#{quoted})?\\s*(#{Gem::Version::VERSION_PATTERN})\\s*" # :nodoc:
+  PATTERN_RAW = "\\s*(#{quoted})?\\s*(#{Gem::Version::VERSION_PATTERN})\\s*".freeze # :nodoc:
 
   ##
   # A regular expression that matches a requirement
 
-  PATTERN = /\A#{PATTERN_RAW}\z/.freeze
+  PATTERN = /\A#{PATTERN_RAW}\z/
 
   ##
   # The default requirement matches any non-prerelease version
@@ -214,10 +214,6 @@ class Gem::Requirement
     yaml_initialize coder.tag, coder.map
   end
 
-  def to_yaml_properties # :nodoc:
-    ["@requirements"]
-  end
-
   def encode_with(coder) # :nodoc:
     coder.add "requirements", @requirements
   end
@@ -283,6 +279,11 @@ class Gem::Requirement
 
   def _tilde_requirements
     @_tilde_requirements ||= _sorted_requirements.select {|r| r.first == "~>" }
+  end
+
+  def initialize_copy(other) # :nodoc:
+    @requirements = other.requirements.dup
+    super
   end
 end
 

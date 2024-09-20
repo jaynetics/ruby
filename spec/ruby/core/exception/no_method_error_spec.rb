@@ -62,7 +62,7 @@ describe "NoMethodError#message" do
       NoMethodErrorSpecs::NoMethodErrorC.new.a_private_method
     rescue Exception => e
       e.should be_kind_of(NoMethodError)
-      e.message.lines[0].should =~ /private method `a_private_method' called for /
+      e.message.lines[0].should =~ /private method [`']a_private_method' called for /
     end
   end
 
@@ -125,21 +125,19 @@ describe "NoMethodError#message" do
     end
   end
 
-  ruby_version_is "3.0" do
-    it "uses #name to display the receiver if it is a class or a module" do
-      klass = Class.new { def self.name; "MyClass"; end }
-      begin
-        klass.foo
-      rescue NoMethodError => error
-        error.message.lines.first.chomp.should =~ /^undefined method `foo' for /
-      end
+  it "uses #name to display the receiver if it is a class or a module" do
+    klass = Class.new { def self.name; "MyClass"; end }
+    begin
+      klass.foo
+    rescue NoMethodError => error
+      error.message.lines.first.chomp.should =~ /^undefined method [`']foo' for /
+    end
 
-      mod = Module.new { def self.name; "MyModule"; end }
-      begin
-        mod.foo
-      rescue NoMethodError => error
-        error.message.lines.first.chomp.should =~ /^undefined method `foo' for /
-      end
+    mod = Module.new { def self.name; "MyModule"; end }
+    begin
+      mod.foo
+    rescue NoMethodError => error
+      error.message.lines.first.chomp.should =~ /^undefined method [`']foo' for /
     end
   end
 end

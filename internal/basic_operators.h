@@ -31,11 +31,13 @@ enum ruby_basic_operators {
     BOP_UMINUS,
     BOP_MAX,
     BOP_MIN,
+    BOP_HASH,
     BOP_CALL,
     BOP_AND,
     BOP_OR,
     BOP_CMP,
     BOP_DEFAULT,
+    BOP_PACK,
 
     BOP_LAST_
 };

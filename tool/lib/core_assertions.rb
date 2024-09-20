@@ -1,6 +1,43 @@
 # frozen_string_literal: true
 
 module Test
+
+  class << self
+    ##
+    # Filter object for backtraces.
+
+    attr_accessor :backtrace_filter
+  end
+
+  class BacktraceFilter # :nodoc:
+    def filter bt
+      return ["No backtrace"] unless bt
+
+      new_bt = []
+      pattern = %r[/(?:lib\/test/|core_assertions\.rb:)]
+
+      unless $DEBUG then
+        bt.each do |line|
+          break if pattern.match?(line)
+          new_bt << line
+        end
+
+        new_bt = bt.reject { |line| pattern.match?(line) } if new_bt.empty?
+        new_bt = bt.dup if new_bt.empty?
+      else
+        new_bt = bt.dup
+      end
+
+      new_bt
+    end
+  end
+
+  self.backtrace_filter = BacktraceFilter.new
+
+  def self.filter_backtrace bt # :nodoc:
+    backtrace_filter.filter bt
+  end
+
   module Unit
     module Assertions
       def assert_raises(*exp, &b)
@@ -37,6 +74,11 @@ module Test
     module CoreAssertions
       require_relative 'envutil'
       require 'pp'
+      begin
+        require '-test-/asan'
+      rescue LoadError
+      end
+
       nil.pretty_inspect
 
       def mu_pp(obj) #:nodoc:
@@ -115,6 +157,9 @@ module Test
         pend 'assert_no_memory_leak may consider RJIT memory usage as leak' if defined?(RubyVM::RJIT) && RubyVM::RJIT.enabled?
         # For previous versions which implemented MJIT
         pend 'assert_no_memory_leak may consider MJIT memory usage as leak' if defined?(RubyVM::MJIT) && RubyVM::MJIT.enabled?
+        # ASAN has the same problem - its shadow memory greatly increases memory usage
+        # (plus asan has better ways to detect memory leaks than this assertion)
+        pend 'assert_no_memory_leak may consider ASAN memory usage as leak' if defined?(Test::ASAN) && Test::ASAN.enabled?
 
         require_relative 'memory_status'
         raise Test::Unit::PendedError, "unsupported platform" unless defined?(Memory::Status)
@@ -741,15 +786,16 @@ eom
       %w[
         CLOCK_THREAD_CPUTIME_ID CLOCK_PROCESS_CPUTIME_ID
         CLOCK_MONOTONIC
-      ].find do |clk|
-        if Process.const_defined?(clk)
-          clk = clk.to_sym
-          begin
-            Process.clock_gettime(clk)
-          rescue
-            # Constants may be defined but not implemented, e.g., mingw.
-          else
-            PERFORMANCE_CLOCK = clk
+      ].find do |c|
+        if Process.const_defined?(c)
+          [c.to_sym, Process.const_get(c)].find do |clk|
+            begin
+              Process.clock_gettime(clk)
+            rescue
+              # Constants may be defined but not implemented, e.g., mingw.
+            else
+              PERFORMANCE_CLOCK = clk
+            end
           end
         end
       end
@@ -779,7 +825,9 @@ eom
         end
         times.compact!
         tmin, tmax = times.minmax
-        tbase = 10 ** Math.log10(tmax * ([(tmax / tmin), 2].max ** 2)).ceil
+
+        # safe_factor * tmax * rehearsal_time_variance_factor(equals to 1 when variance is small)
+        tbase = 10 * tmax * [(tmax / tmin) ** 2 / 4, 1].max
         info = "(tmin: #{tmin}, tmax: #{tmax}, tbase: #{tbase})"
 
         seq.each do |i|
@@ -812,6 +860,82 @@ eom
       def new_test_token
         token = "\e[7;1m#{$$.to_s}:#{Time.now.strftime('%s.%L')}:#{rand(0x10000).to_s(16)}:\e[m"
         return token.dump, Regexp.quote(token)
+      end
+
+      # Platform predicates
+
+      def self.mswin?
+        defined?(@mswin) ? @mswin : @mswin = RUBY_PLATFORM.include?('mswin')
+      end
+      private def mswin?
+        CoreAssertions.mswin?
+      end
+
+      def self.mingw?
+        defined?(@mingw) ? @mingw : @mingw = RUBY_PLATFORM.include?('mingw')
+      end
+      private def mingw?
+        CoreAssertions.mingw?
+      end
+
+      module_function def windows?
+        mswin? or mingw?
+      end
+
+      def self.version_compare(expected, actual)
+        expected.zip(actual).each {|e, a| z = (e <=> a); return z if z.nonzero?}
+        0
+      end
+
+      def self.version_match?(expected, actual)
+        if !actual
+          false
+        elsif expected.empty?
+          true
+        elsif expected.size == 1 and Range === (range = expected.first)
+          b, e = range.begin, range.end
+          return false if b and (c = version_compare(Array(b), actual)) > 0
+          return false if e and (c = version_compare(Array(e), actual)) < 0
+          return false if e and range.exclude_end? and c == 0
+          true
+        else
+          version_compare(expected, actual).zero?
+        end
+      end
+
+      def self.linux?(*ver)
+        unless defined?(@linux)
+          @linux = RUBY_PLATFORM.include?('linux') && `uname -r`.scan(/\d+/).map(&:to_i)
+        end
+        version_match? ver, @linux
+      end
+      private def linux?(*ver)
+        CoreAssertions.linux?(*ver)
+      end
+
+      def self.glibc?(*ver)
+        unless defined?(@glibc)
+          libc = `/usr/bin/ldd /bin/sh`[/^\s*libc.*=> *\K\S*/]
+          if libc and /version (\d+)\.(\d+)\.$/ =~ IO.popen([libc], &:read)[]
+            @glibc = [$1.to_i, $2.to_i]
+          else
+            @glibc = false
+          end
+        end
+        version_match? ver, @glibc
+      end
+      private def glibc?(*ver)
+        CoreAssertions.glibc?(*ver)
+      end
+
+      def self.macos?(*ver)
+        unless defined?(@macos)
+          @macos = RUBY_PLATFORM.include?('darwin') && `sw_vers -productVersion`.scan(/\d+/).map(&:to_i)
+        end
+        version_match? ver, @macos
+      end
+      private def macos?(*ver)
+        CoreAssertions.macos?(*ver)
       end
     end
   end

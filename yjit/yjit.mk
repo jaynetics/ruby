@@ -23,7 +23,7 @@ YJIT_LIB_TOUCH = touch $@
 ifeq ($(YJIT_SUPPORT),yes)
 $(YJIT_LIBS): $(YJIT_SRC_FILES)
 	$(ECHO) 'building Rust YJIT (release mode)'
-	$(Q) $(RUSTC) $(YJIT_RUSTC_ARGS)
+	+$(Q) $(RUSTC) $(YJIT_RUSTC_ARGS)
 	$(YJIT_LIB_TOUCH)
 else ifeq ($(YJIT_SUPPORT),no)
 $(YJIT_LIBS):
@@ -32,7 +32,7 @@ $(YJIT_LIBS):
 else ifeq ($(YJIT_SUPPORT),$(filter dev dev_nodebug stats,$(YJIT_SUPPORT)))
 $(YJIT_LIBS): $(YJIT_SRC_FILES)
 	$(ECHO) 'building Rust YJIT ($(YJIT_SUPPORT) mode)'
-	$(Q)$(CHDIR) $(top_srcdir)/yjit && \
+	+$(Q)$(CHDIR) $(top_srcdir)/yjit && \
 	        CARGO_TARGET_DIR='$(CARGO_TARGET_DIR)' \
 	        CARGO_TERM_PROGRESS_WHEN='never' \
 	        $(CARGO) $(CARGO_VERBOSE) build $(CARGO_BUILD_ARGS)
@@ -42,17 +42,14 @@ endif
 
 yjit-libobj: $(YJIT_LIBOBJ)
 
-# Note, BSD handling is in yjit/not_gmake.mk
 YJIT_LIB_SYMBOLS = $(YJIT_LIBS:.a=).symbols
 $(YJIT_LIBOBJ): $(YJIT_LIBS)
 	$(ECHO) 'partial linking $(YJIT_LIBS) into $@'
-ifneq ($(findstring linux,$(target_os)),)
-	$(Q) $(LD) -r -o $@ --whole-archive $(YJIT_LIBS)
-	-$(Q) $(OBJCOPY) --wildcard --keep-global-symbol='$(SYMBOL_PREFIX)rb_*' $(@)
-else ifneq ($(findstring darwin,$(target_os)),)
+ifneq ($(findstring darwin,$(target_os)),)
 	$(Q) $(CC) -nodefaultlibs -r -o $@ -exported_symbols_list $(YJIT_LIB_SYMBOLS) $(YJIT_LIBS)
 else
-	false
+	$(Q) $(LD) -r -o $@ --whole-archive $(YJIT_LIBS)
+	-$(Q) $(OBJCOPY) --wildcard --keep-global-symbol='$(SYMBOL_PREFIX)rb_*' $(@)
 endif
 
 # For Darwin only: a list of symbols that we want the glommed Rust static lib to export.
@@ -86,14 +83,18 @@ update-yjit-bench:
 	$(Q) $(tooldir)/git-refresh -C $(srcdir) --branch main \
 		https://github.com/Shopify/yjit-bench yjit-bench $(GIT_OPTS)
 
+RUST_VERSION = +1.58.0
+
 # Gives quick feedback about YJIT. Not a replacement for a full test run.
 .PHONY: yjit-smoke-test
 yjit-smoke-test:
 ifneq ($(strip $(CARGO)),)
-	$(CARGO) +1.58.0 test --all-features -q --manifest-path='$(top_srcdir)/yjit/Cargo.toml'
+	$(CARGO) $(RUST_VERSION) test --all-features -q --manifest-path='$(top_srcdir)/yjit/Cargo.toml'
 endif
 	$(MAKE) btest RUN_OPTS='--yjit-call-threshold=1' BTESTS=-j
 	$(MAKE) test-all TESTS='$(top_srcdir)/test/ruby/test_yjit.rb'
+
+YJIT_BINDGEN_DIFF_OPTS =
 
 # Generate Rust bindings. See source for details.
 # Needs `./configure --enable-yjit=dev` and Clang.
@@ -101,7 +102,7 @@ ifneq ($(strip $(CARGO)),) # if configure found Cargo
 .PHONY: yjit-bindgen yjit-bindgen-show-unused
 yjit-bindgen: yjit.$(OBJEXT)
 	YJIT_SRC_ROOT_PATH='$(top_srcdir)' $(CARGO) run --manifest-path '$(top_srcdir)/yjit/bindgen/Cargo.toml' -- $(CFLAGS) $(XCFLAGS) $(CPPFLAGS)
-	$(Q) if [ 'x$(HAVE_GIT)' = xyes ]; then $(GIT) -C "$(top_srcdir)" diff --exit-code yjit/src/cruby_bindings.inc.rs; fi
+	$(Q) if [ 'x$(HAVE_GIT)' = xyes ]; then $(GIT) -C "$(top_srcdir)" diff $(YJIT_BINDGEN_DIFF_OPTS) yjit/src/cruby_bindings.inc.rs; fi
 
 check-yjit-bindgen-unused: yjit.$(OBJEXT)
 	RUST_LOG=warn YJIT_SRC_ROOT_PATH='$(top_srcdir)' $(CARGO) run --manifest-path '$(top_srcdir)/yjit/bindgen/Cargo.toml' -- $(CFLAGS) $(XCFLAGS) $(CPPFLAGS) 2>&1 | (! grep "unused option: --allow")

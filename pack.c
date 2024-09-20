@@ -36,10 +36,11 @@
  */
 #ifdef HAVE_TRUE_LONG_LONG
 static const char natstr[] = "sSiIlLqQjJ";
+# define endstr natstr
 #else
 static const char natstr[] = "sSiIlLjJ";
-#endif
 static const char endstr[] = "sSiIlLqQjJ";
+#endif
 
 #ifdef HAVE_TRUE_LONG_LONG
 /* It is intentional to use long long instead of LONG_LONG. */
@@ -779,6 +780,12 @@ pack_pack(rb_execution_context_t *ec, VALUE ary, VALUE fmt, VALUE buffer)
         break;
     }
     return res;
+}
+
+VALUE
+rb_ec_pack_ary(rb_execution_context_t *ec, VALUE ary, VALUE fmt, VALUE buffer)
+{
+    return pack_pack(ec, ary, fmt, buffer);
 }
 
 static const char uu_table[] =

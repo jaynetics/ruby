@@ -2,14 +2,16 @@
 
 require_relative "remote_fetcher"
 require_relative "text"
-require_relative "webauthn_listener"
+require_relative "gemcutter_utilities/webauthn_listener"
+require_relative "gemcutter_utilities/webauthn_poller"
 
 ##
 # Utility methods for using the RubyGems API.
 
 module Gem::GemcutterUtilities
   ERROR_CODE = 1
-  API_SCOPES = [:index_rubygems, :push_rubygem, :yank_rubygem, :add_owner, :remove_owner, :access_webhooks, :show_dashboard].freeze
+  API_SCOPES = [:index_rubygems, :push_rubygem, :yank_rubygem, :add_owner, :remove_owner, :access_webhooks].freeze
+  EXCLUSIVELY_API_SCOPES = [:show_dashboard].freeze
 
   include Gem::Text
 
@@ -83,7 +85,7 @@ module Gem::GemcutterUtilities
   # If +allowed_push_host+ metadata is present, then it will only allow that host.
 
   def rubygems_api_request(method, path, host = nil, allowed_push_host = nil, scope: nil, credentials: {}, &block)
-    require "net/http"
+    require_relative "vendored_net_http"
 
     self.host = host if host
     unless self.host
@@ -92,8 +94,8 @@ module Gem::GemcutterUtilities
     end
 
     if allowed_push_host
-      allowed_host_uri = URI.parse(allowed_push_host)
-      host_uri         = URI.parse(self.host)
+      allowed_host_uri = Gem::URI.parse(allowed_push_host)
+      host_uri         = Gem::URI.parse(self.host)
 
       unless (host_uri.scheme == allowed_host_uri.scheme) && (host_uri.host == allowed_host_uri.host)
         alert_error "#{self.host.inspect} is not allowed by the gemspec, which only allows #{allowed_push_host.inspect}"
@@ -101,7 +103,7 @@ module Gem::GemcutterUtilities
       end
     end
 
-    uri = URI.parse "#{self.host}/#{path}"
+    uri = Gem::URI.parse "#{self.host}/#{path}"
     response = request_with_otp(method, uri, &block)
 
     if mfa_unauthorized?(response)
@@ -118,7 +120,7 @@ module Gem::GemcutterUtilities
   end
 
   def mfa_unauthorized?(response)
-    response.is_a?(Net::HTTPUnauthorized) && response.body.start_with?("You have enabled multifactor authentication")
+    response.is_a?(Gem::Net::HTTPUnauthorized) && response.body.start_with?("You have enabled multifactor authentication")
   end
 
   def update_scope(scope)
@@ -128,14 +130,14 @@ module Gem::GemcutterUtilities
 
     say "The existing key doesn't have access of #{scope} on #{pretty_host}. Please sign in to update access."
 
-    email    = ask "   Email: "
-    password = ask_for_password "Password: "
+    identifier = ask "Username/email: "
+    password   = ask_for_password "      Password: "
 
     response = rubygems_api_request(:put, "api/v1/api_key",
                                     sign_in_host, scope: scope) do |request|
-      request.basic_auth email, password
+      request.basic_auth identifier, password
       request["OTP"] = otp if otp
-      request.body = URI.encode_www_form({ :api_key => api_key }.merge(update_scope_params))
+      request.body = Gem::URI.encode_www_form({ api_key: api_key }.merge(update_scope_params))
     end
 
     with_response response do |_resp|
@@ -157,25 +159,25 @@ module Gem::GemcutterUtilities
     say "Don't have an account yet? " \
         "Create one at #{sign_in_host}/sign_up"
 
-    email = ask "   Email: "
-    password = ask_for_password "Password: "
+    identifier = ask "Username/email: "
+    password   = ask_for_password "      Password: "
     say "\n"
 
     key_name     = get_key_name(scope)
     scope_params = get_scope_params(scope)
-    profile      = get_user_profile(email, password)
+    profile      = get_user_profile(identifier, password)
     mfa_params   = get_mfa_params(profile)
     all_params   = scope_params.merge(mfa_params)
     warning      = profile["warning"]
-    credentials  = { email: email, password: password }
+    credentials  = { identifier: identifier, password: password }
 
     say "#{warning}\n" if warning
 
     response = rubygems_api_request(:post, "api/v1/api_key",
                                     sign_in_host, credentials: credentials, scope: scope) do |request|
-      request.basic_auth email, password
+      request.basic_auth identifier, password
       request["OTP"] = otp if otp
-      request.body = URI.encode_www_form({ name: key_name }.merge(all_params))
+      request.body = Gem::URI.encode_www_form({ name: key_name }.merge(all_params))
     end
 
     with_response response do |resp|
@@ -207,13 +209,13 @@ module Gem::GemcutterUtilities
 
   def with_response(response, error_prefix = nil)
     case response
-    when Net::HTTPSuccess then
+    when Gem::Net::HTTPSuccess then
       if block_given?
         yield response
       else
         say clean_text(response.body)
       end
-    when Net::HTTPPermanentRedirect, Net::HTTPRedirection then
+    when Gem::Net::HTTPPermanentRedirect, Gem::Net::HTTPRedirection then
       message = "The request has redirected permanently to #{response["location"]}. Please check your defined push host URL."
       message = "#{error_prefix}: #{message}" if error_prefix
 
@@ -243,7 +245,7 @@ module Gem::GemcutterUtilities
   private
 
   def request_with_otp(method, uri, &block)
-    request_method = Net::HTTP.const_get method.to_s.capitalize
+    request_method = Gem::Net::HTTP.const_get method.to_s.capitalize
 
     Gem::RemoteFetcher.fetcher.request(uri, request_method) do |req|
       req["OTP"] = otp if otp
@@ -253,36 +255,39 @@ module Gem::GemcutterUtilities
 
   def fetch_otp(credentials)
     options[:otp] = if webauthn_url = webauthn_verification_url(credentials)
-      wait_for_otp(webauthn_url)
+      server = TCPServer.new 0
+      port = server.addr[1].to_s
+
+      url_with_port = "#{webauthn_url}?port=#{port}"
+      say "You have enabled multi-factor authentication. Please visit #{url_with_port} to authenticate via security device. If you can't verify using WebAuthn but have OTP enabled, you can re-run the gem signin command with the `--otp [your_code]` option."
+
+      threads = [WebauthnListener.listener_thread(host, server), WebauthnPoller.poll_thread(options, host, webauthn_url, credentials)]
+      otp_thread = wait_for_otp_thread(*threads)
+
+      threads.each(&:join)
+
+      if error = otp_thread[:error]
+        alert_error error.message
+        terminate_interaction(1)
+      end
+
+      say "You are verified with a security device. You may close the browser window."
+      otp_thread[:otp]
     else
       say "You have enabled multi-factor authentication. Please enter OTP code."
       ask "Code: "
     end
   end
 
-  def wait_for_otp(webauthn_url)
-    server = TCPServer.new 0
-    port = server.addr[1].to_s
-
-    thread = Thread.new do
-      Thread.current[:otp] = Gem::WebauthnListener.wait_for_otp_code(host, server)
-    rescue Gem::WebauthnVerificationError => e
-      Thread.current[:error] = e
+  def wait_for_otp_thread(*threads)
+    loop do
+      threads.each do |otp_thread|
+        return otp_thread unless otp_thread.alive?
+      end
+      sleep 0.1
     end
-    thread.abort_on_exception = true
-    thread.report_on_exception = false
-
-    url_with_port = "#{webauthn_url}?port=#{port}"
-    say "You have enabled multi-factor authentication. Please visit #{url_with_port} to authenticate via security device. If you can't verify using WebAuthn but have OTP enabled, you can re-run the gem signin command with the `--otp [your_code]` option."
-
-    thread.join
-    if error = thread[:error]
-      alert_error error.message
-      terminate_interaction(1)
-    end
-
-    say "You are verified with a security device. You may close the browser window."
-    thread[:otp]
+  ensure
+    threads.each(&:exit)
   end
 
   def webauthn_verification_url(credentials)
@@ -290,10 +295,10 @@ module Gem::GemcutterUtilities
       if credentials.empty?
         request.add_field "Authorization", api_key
       else
-        request.basic_auth credentials[:email], credentials[:password]
+        request.basic_auth credentials[:identifier], credentials[:password]
       end
     end
-    response.is_a?(Net::HTTPSuccess) ? response.body : nil
+    response.is_a?(Gem::Net::HTTPSuccess) ? response.body : nil
   end
 
   def pretty_host(host)
@@ -305,15 +310,31 @@ module Gem::GemcutterUtilities
   end
 
   def get_scope_params(scope)
-    scope_params = {}
+    scope_params = { index_rubygems: true }
 
     if scope
       scope_params = { scope => true }
     else
-      say "Please select scopes you want to enable for the API key (y/n)"
-      API_SCOPES.each do |s|
-        selected = ask_yes_no(s.to_s, false)
-        scope_params[s] = true if selected
+      say "The default access scope is:"
+      scope_params.each do |k, _v|
+        say "  #{k}: y"
+      end
+      say "\n"
+      customise = ask_yes_no("Do you want to customise scopes?", false)
+      if customise
+        EXCLUSIVELY_API_SCOPES.each do |excl_scope|
+          selected = ask_yes_no("#{excl_scope} (exclusive scope, answering yes will not prompt for other scopes)", false)
+          next unless selected
+
+          return { excl_scope => true }
+        end
+
+        scope_params = {}
+
+        API_SCOPES.each do |s|
+          selected = ask_yes_no(s.to_s, false)
+          scope_params[s] = true if selected
+        end
       end
       say "\n"
     end
@@ -325,15 +346,15 @@ module Gem::GemcutterUtilities
     host == Gem::DEFAULT_HOST
   end
 
-  def get_user_profile(email, password)
+  def get_user_profile(identifier, password)
     return {} unless default_host?
 
     response = rubygems_api_request(:get, "api/v1/profile/me.yaml") do |request|
-      request.basic_auth email, password
+      request.basic_auth identifier, password
     end
 
     with_response response do |resp|
-      Gem::SafeYAML.load clean_text(resp.body)
+      Gem::ConfigFile.load_with_rubygems_config_hash(clean_text(resp.body))
     end
   end
 
@@ -362,6 +383,6 @@ module Gem::GemcutterUtilities
   end
 
   def api_key_forbidden?(response)
-    response.is_a?(Net::HTTPForbidden) && response.body.start_with?("The API key doesn't have access")
+    response.is_a?(Gem::Net::HTTPForbidden) && response.body.start_with?("The API key doesn't have access")
   end
 end

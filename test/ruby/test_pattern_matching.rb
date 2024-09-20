@@ -9,14 +9,14 @@ class TestPatternMatching < Test::Unit::TestCase
   end
 
   def setup
-    if defined?(DidYouMean)
+    if defined?(DidYouMean.formatter=nil)
       @original_formatter = DidYouMean.formatter
       DidYouMean.formatter = NullFormatter.new
     end
   end
 
   def teardown
-    if defined?(DidYouMean)
+    if defined?(DidYouMean.formatter=nil)
       DidYouMean.formatter = @original_formatter
     end
   end
@@ -109,16 +109,12 @@ class TestPatternMatching < Test::Unit::TestCase
     end
 
     assert_block do
-      # suppress "warning: Pattern matching is experimental, and the behavior may change in future versions of Ruby!"
-      experimental, Warning[:experimental] = Warning[:experimental], false
       eval(%q{
         case true
         in a
           a
         end
       })
-    ensure
-      Warning[:experimental] = experimental
     end
 
     assert_block do
@@ -353,6 +349,14 @@ END
     assert_block do
       case 'abc'
       in /a/
+        true
+      end
+    end
+
+    assert_block do
+      a = "abc"
+      case 'abc'
+      in /#{a}/o
         true
       end
     end
@@ -1165,7 +1169,7 @@ END
       end
     end
 
-    bug18890 = assert_warning(/(?:.*:[47]: warning: unused literal ignored\n){2}/) do
+    bug18890 = assert_warning(/(?:.*:[47]: warning: possibly useless use of a literal in void context\n){2}/) do
       eval("#{<<~';;;'}")
       proc do |i|
         case i
@@ -1327,7 +1331,7 @@ END
     end
 
     assert_block do
-      case {}
+      case C.new({})
       in {}
         C.keys == nil
       end

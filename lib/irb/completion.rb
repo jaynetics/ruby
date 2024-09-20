@@ -1,4 +1,4 @@
-# frozen_string_literal: false
+# frozen_string_literal: true
 #
 #   irb/completion.rb -
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
@@ -8,30 +8,7 @@
 require_relative 'ruby-lex'
 
 module IRB
-  module InputCompletor # :nodoc:
-    using Module.new {
-      refine ::Binding do
-        def eval_methods
-          ::Kernel.instance_method(:methods).bind(eval("self")).call
-        end
-
-        def eval_private_methods
-          ::Kernel.instance_method(:private_methods).bind(eval("self")).call
-        end
-
-        def eval_instance_variables
-          ::Kernel.instance_method(:instance_variables).bind(eval("self")).call
-        end
-
-        def eval_global_variables
-          ::Kernel.instance_method(:global_variables).bind(eval("self")).call
-        end
-
-        def eval_class_constants
-          ::Module.instance_method(:constants).bind(eval("self.class")).call
-        end
-      end
-    }
+  class BaseCompletor # :nodoc:
 
     # Set of reserved words used by Ruby, you should not use these for
     # constants or variables
@@ -56,7 +33,15 @@ module IRB
       yield
     ]
 
-    BASIC_WORD_BREAK_CHARACTERS = " \t\n`><=;|&{("
+    HELP_COMMAND_PREPOSING = /\Ahelp\s+/
+
+    def completion_candidates(preposing, target, postposing, bind:)
+      raise NotImplementedError
+    end
+
+    def doc_namespace(preposing, matched, postposing, bind:)
+      raise NotImplementedError
+    end
 
     GEM_PATHS =
       if defined?(Gem::Specification)
@@ -73,7 +58,7 @@ module IRB
         []
       end.freeze
 
-    def self.retrieve_gem_and_system_load_path
+    def retrieve_gem_and_system_load_path
       candidates = (GEM_PATHS | $LOAD_PATH)
       candidates.map do |p|
         if p.respond_to?(:to_path)
@@ -84,8 +69,8 @@ module IRB
       end.compact.sort
     end
 
-    def self.retrieve_files_to_require_from_load_path
-      @@files_from_load_path ||=
+    def retrieve_files_to_require_from_load_path
+      @files_from_load_path ||=
         (
           shortest = []
           rest = retrieve_gem_and_system_load_path.each_with_object([]) { |path, result|
@@ -103,13 +88,84 @@ module IRB
         )
     end
 
-    def self.retrieve_files_to_require_relative_from_current_dir
-      @@files_from_current_dir ||= Dir.glob("**/*.{rb,#{RbConfig::CONFIG['DLEXT']}}", base: '.').map { |path|
+    def command_candidates(target)
+      if !target.empty?
+        IRB::Command.command_names.select { _1.start_with?(target) }
+      else
+        []
+      end
+    end
+
+    def retrieve_files_to_require_relative_from_current_dir
+      @files_from_current_dir ||= Dir.glob("**/*.{rb,#{RbConfig::CONFIG['DLEXT']}}", base: '.').map { |path|
         path.sub(/\.(rb|#{RbConfig::CONFIG['DLEXT']})\z/, '')
       }
     end
+  end
 
-    CompletionRequireProc = lambda { |target, preposing = nil, postposing = nil|
+  class TypeCompletor < BaseCompletor # :nodoc:
+    def initialize(context)
+      @context = context
+    end
+
+    def inspect
+      ReplTypeCompletor.info
+    end
+
+    def completion_candidates(preposing, target, _postposing, bind:)
+      # When completing the argument of `help` command, only commands should be candidates
+      return command_candidates(target) if preposing.match?(HELP_COMMAND_PREPOSING)
+
+      commands = if preposing.empty?
+        command_candidates(target)
+      # It doesn't make sense to propose commands with other preposing
+      else
+        []
+      end
+
+      result = ReplTypeCompletor.analyze(preposing + target, binding: bind, filename: @context.irb_path)
+
+      return commands unless result
+
+      commands | result.completion_candidates.map { target + _1 }
+    end
+
+    def doc_namespace(preposing, matched, _postposing, bind:)
+      result = ReplTypeCompletor.analyze(preposing + matched, binding: bind, filename: @context.irb_path)
+      result&.doc_namespace('')
+    end
+  end
+
+  class RegexpCompletor < BaseCompletor # :nodoc:
+    using Module.new {
+      refine ::Binding do
+        def eval_methods
+          ::Kernel.instance_method(:methods).bind(eval("self")).call
+        end
+
+        def eval_private_methods
+          ::Kernel.instance_method(:private_methods).bind(eval("self")).call
+        end
+
+        def eval_instance_variables
+          ::Kernel.instance_method(:instance_variables).bind(eval("self")).call
+        end
+
+        def eval_global_variables
+          ::Kernel.instance_method(:global_variables).bind(eval("self")).call
+        end
+
+        def eval_class_constants
+          ::Module.instance_method(:constants).bind(eval("self.class")).call
+        end
+      end
+    }
+
+    def inspect
+      'RegexpCompletor'
+    end
+
+    def complete_require_path(target, preposing, postposing)
       if target =~ /\A(['"])([^'"]+)\Z/
         quote = $1
         actual_target = $2
@@ -124,39 +180,46 @@ module IRB
           break
         end
       end
-      result = []
-      if tok && tok.event == :on_ident && tok.state == Ripper::EXPR_CMDARG
-        case tok.tok
-        when 'require'
-          result = retrieve_files_to_require_from_load_path.select { |path|
-            path.start_with?(actual_target)
-          }.map { |path|
-            quote + path
-          }
-        when 'require_relative'
-          result = retrieve_files_to_require_relative_from_current_dir.select { |path|
-            path.start_with?(actual_target)
-          }.map { |path|
-            quote + path
-          }
-        end
-      end
-      result
-    }
+      return unless tok&.event == :on_ident && tok.state == Ripper::EXPR_CMDARG
 
-    CompletionProc = lambda { |target, preposing = nil, postposing = nil|
-      if preposing && postposing
-        result = CompletionRequireProc.(target, preposing, postposing)
-        unless result
-          result = retrieve_completion_data(target).compact.map{ |i| i.encode(Encoding.default_external) }
-        end
-        result
-      else
-        retrieve_completion_data(target).compact.map{ |i| i.encode(Encoding.default_external) }
+      case tok.tok
+      when 'require'
+        retrieve_files_to_require_from_load_path.select { |path|
+          path.start_with?(actual_target)
+        }.map { |path|
+          quote + path
+        }
+      when 'require_relative'
+        retrieve_files_to_require_relative_from_current_dir.select { |path|
+          path.start_with?(actual_target)
+        }.map { |path|
+          quote + path
+        }
       end
-    }
+    end
 
-    def self.retrieve_completion_data(input, bind: IRB.conf[:MAIN_CONTEXT].workspace.binding, doc_namespace: false)
+    def completion_candidates(preposing, target, postposing, bind:)
+      if result = complete_require_path(target, preposing, postposing)
+        return result
+      end
+
+      commands = command_candidates(target)
+
+      # When completing the argument of `help` command, only commands should be candidates
+      return commands if preposing.match?(HELP_COMMAND_PREPOSING)
+
+      # It doesn't make sense to propose commands with other preposing
+      commands = [] unless preposing.empty?
+
+      completion_data = retrieve_completion_data(target, bind: bind, doc_namespace: false).compact.map{ |i| i.encode(Encoding.default_external) }
+      commands | completion_data
+    end
+
+    def doc_namespace(_preposing, matched, _postposing, bind:)
+      retrieve_completion_data(matched, bind: bind, doc_namespace: true)
+    end
+
+    def retrieve_completion_data(input, bind:, doc_namespace:)
       case input
       # this regexp only matches the closing character because of irb's Reline.completer_quote_characters setting
       # details are described in: https://github.com/ruby/irb/pull/523
@@ -199,16 +262,16 @@ module IRB
         end
 
       when /^([^\}]*\})\.([^.]*)$/
-        # Proc or Hash
+        # Hash or Proc
         receiver = $1
         message = $2
 
         if doc_namespace
-          ["Proc.#{message}", "Hash.#{message}"]
+          ["Hash.#{message}", "Proc.#{message}"]
         else
-          proc_candidates = Proc.instance_methods.collect{|m| m.to_s}
           hash_candidates = Hash.instance_methods.collect{|m| m.to_s}
-          select_message(receiver, message, proc_candidates | hash_candidates)
+          proc_candidates = Proc.instance_methods.collect{|m| m.to_s}
+          select_message(receiver, message, hash_candidates | proc_candidates)
         end
 
       when /^(:[^:.]+)$/
@@ -218,7 +281,7 @@ module IRB
         else
           sym = $1
           candidates = Symbol.all_symbols.collect do |s|
-            ":" + s.id2name.encode(Encoding.default_external)
+            s.inspect
           rescue EncodingError
             # ignore
           end
@@ -233,7 +296,7 @@ module IRB
         if doc_namespace
           candidates.find { |i| i == receiver }
         else
-          candidates.grep(/^#{receiver}/).collect{|e| "::" + e}
+          candidates.grep(/^#{Regexp.quote(receiver)}/).collect{|e| "::" + e}
         end
 
       when /^([A-Z].*)::([^:.]*)$/
@@ -356,7 +419,7 @@ module IRB
 
         if doc_namespace
           rec_class = rec.is_a?(Module) ? rec : rec.class
-          "#{rec_class.name}#{sep}#{candidates.find{ |i| i == message }}"
+          "#{rec_class.name}#{sep}#{candidates.find{ |i| i == message }}" rescue nil
         else
           select_message(receiver, message, candidates, sep)
         end
@@ -374,13 +437,19 @@ module IRB
         else
           select_message(receiver, message, candidates.sort)
         end
-
+      when /^\s*$/
+        # empty input
+        if doc_namespace
+          nil
+        else
+          []
+        end
       else
         if doc_namespace
           vars = (bind.local_variables | bind.eval_instance_variables).collect{|m| m.to_s}
           perfect_match_var = vars.find{|m| m.to_s == input}
           if perfect_match_var
-            eval("#{perfect_match_var}.class.name", bind)
+            eval("#{perfect_match_var}.class.name", bind) rescue nil
           else
             candidates = (bind.eval_methods | bind.eval_private_methods | bind.local_variables | bind.eval_instance_variables | bind.eval_class_constants).collect{|m| m.to_s}
             candidates |= ReservedWords
@@ -394,44 +463,10 @@ module IRB
       end
     end
 
-    PerfectMatchedProc = ->(matched, bind: IRB.conf[:MAIN_CONTEXT].workspace.binding) {
-      begin
-        require 'rdoc'
-      rescue LoadError
-        return
-      end
-
-      RDocRIDriver ||= RDoc::RI::Driver.new
-
-      if matched =~ /\A(?:::)?RubyVM/ and not ENV['RUBY_YES_I_AM_NOT_A_NORMAL_USER']
-        IRB.__send__(:easter_egg)
-        return
-      end
-
-      namespace = retrieve_completion_data(matched, bind: bind, doc_namespace: true)
-      return unless namespace
-
-      if namespace.is_a?(Array)
-        out = RDoc::Markup::Document.new
-        namespace.each do |m|
-          begin
-            RDocRIDriver.add_method(out, m)
-          rescue RDoc::RI::Driver::NotFoundError
-          end
-        end
-        RDocRIDriver.display(out)
-      else
-        begin
-          RDocRIDriver.display_names([namespace])
-        rescue RDoc::RI::Driver::NotFoundError
-        end
-      end
-    }
-
     # Set of available operators in Ruby
     Operators = %w[% & * ** + - / < << <= <=> == === =~ > >= >> [] []= ^ ! != !~]
 
-    def self.select_message(receiver, message, candidates, sep = ".")
+    def select_message(receiver, message, candidates, sep = ".")
       candidates.grep(/^#{Regexp.quote(message)}/).collect do |e|
         case e
         when /^[a-zA-Z_]/
@@ -443,4 +478,20 @@ module IRB
       end
     end
   end
+
+  module InputCompletor
+    class << self
+      private def regexp_completor
+        @regexp_completor ||= RegexpCompletor.new
+      end
+
+      def retrieve_completion_data(input, bind: IRB.conf[:MAIN_CONTEXT].workspace.binding, doc_namespace: false)
+        regexp_completor.retrieve_completion_data(input, bind: bind, doc_namespace: doc_namespace)
+      end
+    end
+    CompletionProc = ->(target, preposing = nil, postposing = nil) {
+      regexp_completor.completion_candidates(preposing || '', target, postposing || '', bind: IRB.conf[:MAIN_CONTEXT].workspace.binding)
+    }
+  end
+  deprecate_constant :InputCompletor
 end

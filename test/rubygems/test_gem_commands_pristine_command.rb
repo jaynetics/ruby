@@ -96,7 +96,7 @@ class TestGemCommandsPristineCommand < Gem::TestCase
     out = @ui.output.split("\n")
 
     assert_equal "Restoring gems to pristine condition...", out.shift
-    assert_equal "Restored #{a.full_name}", out.shift
+    assert_equal "Restored #{a.full_name} in #{Gem.user_dir}", out.shift
     assert_empty out, out.inspect
   ensure
     FileUtils.chmod(0o755, @gemhome)
@@ -296,7 +296,7 @@ class TestGemCommandsPristineCommand < Gem::TestCase
 
     build_args = %w[--with-awesome=true --sweet]
 
-    install_gem a, :build_args => build_args
+    install_gem a, build_args: build_args
 
     @cmd.options[:args] = %w[a]
 
@@ -392,6 +392,9 @@ class TestGemCommandsPristineCommand < Gem::TestCase
     b = util_spec "b"
     install_gem b
 
+    assert_path_exist File.join(gemhome2, "gems", "b-2")
+    assert_path_not_exist File.join(@gemhome, "gems", "b-2")
+
     @cmd.options[:args] = %w[a b]
 
     use_ui @ui do
@@ -401,7 +404,7 @@ class TestGemCommandsPristineCommand < Gem::TestCase
     out = @ui.output.split "\n"
 
     assert_equal "Restoring gems to pristine condition...", out.shift
-    assert_equal "Restored #{a.full_name}", out.shift
+    assert_equal "Restored #{a.full_name} in #{@gemhome}", out.shift
     assert_equal "Restored #{b.full_name}", out.shift
     assert_empty out, out.inspect
 
@@ -473,8 +476,9 @@ class TestGemCommandsPristineCommand < Gem::TestCase
 
     [
       "Restoring gems to pristine condition...",
-      "Cached gem for a-1 not found, attempting to fetch...",
-      "Restored a-1",
+      "Cached gem for a-1 in #{@gemhome} not found, attempting to fetch...",
+      "Restored a-1 in #{@gemhome}",
+      "Restored b-1 in #{@gemhome}",
       "Cached gem for b-1 not found, attempting to fetch...",
       "Restored b-1",
     ].each do |line|
@@ -492,7 +496,7 @@ class TestGemCommandsPristineCommand < Gem::TestCase
     assert_path_exist File.join(gemhome2, "cache", "b-1.gem")
     assert_path_not_exist File.join(@gemhome, "cache", "b-2.gem")
     assert_path_exist File.join(gemhome2, "gems", "b-1")
-    assert_path_not_exist File.join(@gemhome, "gems", "b-1")
+    assert_path_exist File.join(@gemhome, "gems", "b-1")
   end
 
   def test_execute_no_gem
@@ -546,7 +550,7 @@ class TestGemCommandsPristineCommand < Gem::TestCase
       fp.puts "puts __FILE__"
     end
     write_file File.join(@tempdir, "lib", "rubygems_plugin.rb") do |fp|
-      fp.puts "puts __FILE__"
+      fp.puts "# do nothing"
     end
     write_file File.join(@tempdir, "bin", "foo") do |fp|
       fp.puts "#!/usr/bin/ruby"

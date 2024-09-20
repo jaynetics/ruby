@@ -6,7 +6,7 @@ require_relative 'ruby_vm/helpers/c_escape'
 
 SUBLIBS = {}
 REQUIRED = {}
-BUILTIN_ATTRS = %w[leaf no_gc]
+BUILTIN_ATTRS = %w[leaf inline_block use_block]
 
 def string_literal(lit, str = [])
   while lit
@@ -166,7 +166,7 @@ def collect_builtin base, tree, name, bs, inlines, locals = nil
           when 'cstmt'
             text = inline_text argc, args.first
 
-            func_name = "_bi#{inlines.size}"
+            func_name = "_bi#{lineno}"
             cfunc_name = make_cfunc_name(inlines, name, lineno)
             inlines[cfunc_name] = [lineno, text, locals, func_name]
             argc -= 1
@@ -174,7 +174,7 @@ def collect_builtin base, tree, name, bs, inlines, locals = nil
             text = inline_text argc, args.first
             code = "return #{text};"
 
-            func_name = "_bi#{inlines.size}"
+            func_name = "_bi#{lineno}"
             cfunc_name = make_cfunc_name(inlines, name, lineno)
 
             locals = [] if $1 == 'cconst'
@@ -263,12 +263,19 @@ end
 
 def generate_cexpr(ofile, lineno, line_file, body_lineno, text, locals, func_name)
   f = StringIO.new
+
+  # Avoid generating fetches of lvars we don't need. This is imperfect as it
+  # will match text inside strings or other false positives.
+  local_candidates = text.scan(/[a-zA-Z_][a-zA-Z0-9_]*/)
+
   f.puts '{'
   lineno += 1
   # locals is nil outside methods
   locals&.reverse_each&.with_index{|param, i|
     next unless Symbol === param
-    f.puts "MAYBE_UNUSED(const VALUE) #{param} = rb_vm_lvar(ec, #{-3 - i});"
+    next unless local_candidates.include?(param.to_s)
+    f.puts "VALUE *const #{param}__ptr = (VALUE *)&ec->cfp->ep[#{-3 - i}];"
+    f.puts "MAYBE_UNUSED(const VALUE) #{param} = *#{param}__ptr;"
     lineno += 1
   }
   f.puts "#line #{body_lineno} \"#{line_file}\""
@@ -296,13 +303,7 @@ def mk_builtin_header file
   collect_iseq RubyVM::InstructionSequence.compile(code).to_a
   collect_builtin(base, Ripper.sexp(code), 'top', bs = {}, inlines = {})
 
-  begin
-    f = File.open(ofile, 'w')
-  rescue SystemCallError # EACCES, EPERM, EROFS, etc.
-    # Fall back to the current directory
-    f = File.open(File.basename(ofile), 'w')
-  end
-  begin
+  StringIO.open do |f|
     if File::ALT_SEPARATOR
       file = file.tr(File::ALT_SEPARATOR, File::SEPARATOR)
       ofile = ofile.tr(File::ALT_SEPARATOR, File::SEPARATOR)
@@ -383,8 +384,13 @@ def mk_builtin_header file
     f.puts "  rb_load_with_builtin_functions(#{base.dump}, #{table});"
 
     f.puts "}"
-  ensure
-    f.close
+
+    begin
+      File.write(ofile, f.string)
+    rescue SystemCallError # EACCES, EPERM, EROFS, etc.
+      # Fall back to the current directory
+      File.write(File.basename(ofile), f.string)
+    end
   end
 end
 

@@ -3,7 +3,6 @@
 require_relative "helper"
 require "rubygems/request"
 require "ostruct"
-require "base64"
 
 unless Gem::HAVE_OPENSSL
   warn "Skipping Gem::Request tests.  openssl not found."
@@ -21,6 +20,12 @@ class TestGemRequest < Gem::TestCase
     Gem::Request.create_with_proxy uri, request_class, last_modified, proxy
   end
 
+  # This method is same code as Base64.encode64
+  # We should not use Base64.encode64 because we need to avoid gem activation.
+  def base64_encode64(bin)
+    [bin].pack("m")
+  end
+
   def setup
     @proxies = %w[http_proxy https_proxy HTTP_PROXY http_proxy_user HTTP_PROXY_USER http_proxy_pass HTTP_PROXY_PASS no_proxy NO_PROXY]
     @old_proxies = @proxies.map {|k| ENV[k] }
@@ -29,7 +34,7 @@ class TestGemRequest < Gem::TestCase
     super
 
     @proxy_uri = "http://localhost:1234"
-    @uri = URI("http://example")
+    @uri = Gem::URI("http://example")
 
     @request = make_request @uri, nil, nil, nil
   end
@@ -51,7 +56,7 @@ class TestGemRequest < Gem::TestCase
   def test_initialize_proxy_URI
     proxy_uri = "http://proxy.example.com"
 
-    request = make_request @uri, nil, nil, URI(proxy_uri)
+    request = make_request @uri, nil, nil, Gem::URI(proxy_uri)
 
     assert_equal proxy_uri, request.proxy_uri.to_s
   end
@@ -72,18 +77,18 @@ class TestGemRequest < Gem::TestCase
   def test_initialize_proxy_ENV_https
     ENV["https_proxy"] = @proxy_uri
 
-    request = make_request URI("https://example"), nil, nil, nil
+    request = make_request Gem::URI("https://example"), nil, nil, nil
 
     proxy = request.proxy_uri
 
-    assert_equal URI(@proxy_uri), proxy
+    assert_equal Gem::URI(@proxy_uri), proxy
   end
 
   def test_proxy_ENV
     ENV["http_proxy"] = "http://proxy"
     ENV["https_proxy"] = ""
 
-    request = make_request URI("https://example"), nil, nil, nil
+    request = make_request Gem::URI("https://example"), nil, nil, nil
 
     proxy = request.proxy_uri
 
@@ -91,13 +96,13 @@ class TestGemRequest < Gem::TestCase
   end
 
   def test_configure_connection_for_https
-    connection = Net::HTTP.new "localhost", 443
+    connection = Gem::Net::HTTP.new "localhost", 443
 
     request = Class.new(Gem::Request) do
       def self.get_cert_files
         [TestGemRequest::PUBLIC_CERT_FILE]
       end
-    end.create_with_proxy URI("https://example"), nil, nil, nil
+    end.create_with_proxy Gem::URI("https://example"), nil, nil, nil
 
     Gem::Request.configure_connection_for_https connection, request.cert_files
 
@@ -110,13 +115,13 @@ class TestGemRequest < Gem::TestCase
     ssl_ca_cert = Gem.configuration.ssl_ca_cert
     Gem.configuration.ssl_ca_cert = CA_CERT_FILE
 
-    connection = Net::HTTP.new "localhost", 443
+    connection = Gem::Net::HTTP.new "localhost", 443
 
     request = Class.new(Gem::Request) do
       def self.get_cert_files
         [TestGemRequest::PUBLIC_CERT_FILE]
       end
-    end.create_with_proxy URI("https://example"), nil, nil, nil
+    end.create_with_proxy Gem::URI("https://example"), nil, nil, nil
 
     Gem::Request.configure_connection_for_https connection, request.cert_files
 
@@ -133,17 +138,17 @@ class TestGemRequest < Gem::TestCase
     request = make_request @uri, nil, nil, nil
     proxy = request.proxy_uri
 
-    assert_equal URI(@proxy_uri), proxy
+    assert_equal Gem::URI(@proxy_uri), proxy
   end
 
   def test_get_proxy_from_env_https
     ENV["https_proxy"] = @proxy_uri
-    uri = URI("https://example")
+    uri = Gem::URI("https://example")
     request = make_request uri, nil, nil, nil
 
     proxy = request.proxy_uri
 
-    assert_equal URI(@proxy_uri), proxy
+    assert_equal Gem::URI(@proxy_uri), proxy
   end
 
   def test_get_proxy_from_env_domain
@@ -186,9 +191,9 @@ class TestGemRequest < Gem::TestCase
   end
 
   def test_fetch
-    uri = Gem::Uri.new(URI.parse("#{@gem_repo}/specs.#{Gem.marshal_version}"))
-    response = util_stub_net_http(:body => :junk, :code => 200) do
-      @request = make_request(uri, Net::HTTP::Get, nil, nil)
+    uri = Gem::Uri.new(Gem::URI.parse("#{@gem_repo}/specs.#{Gem.marshal_version}"))
+    response = util_stub_net_http(body: :junk, code: 200) do
+      @request = make_request(uri, Gem::Net::HTTP::Get, nil, nil)
 
       @request.fetch
     end
@@ -199,58 +204,58 @@ class TestGemRequest < Gem::TestCase
 
   def test_fetch_basic_auth
     Gem.configuration.verbose = :really
-    uri = Gem::Uri.new(URI.parse("https://user:pass@example.rubygems/specs.#{Gem.marshal_version}"))
-    conn = util_stub_net_http(:body => :junk, :code => 200) do |c|
+    uri = Gem::Uri.new(Gem::URI.parse("https://user:pass@example.rubygems/specs.#{Gem.marshal_version}"))
+    conn = util_stub_net_http(body: :junk, code: 200) do |c|
       use_ui @ui do
-        @request = make_request(uri, Net::HTTP::Get, nil, nil)
+        @request = make_request(uri, Gem::Net::HTTP::Get, nil, nil)
         @request.fetch
       end
       c
     end
 
     auth_header = conn.payload["Authorization"]
-    assert_equal "Basic #{Base64.encode64("user:pass")}".strip, auth_header
+    assert_equal "Basic #{base64_encode64("user:pass")}".strip, auth_header
     assert_includes @ui.output, "GET https://user:REDACTED@example.rubygems/specs.#{Gem.marshal_version}"
   end
 
   def test_fetch_basic_auth_encoded
     Gem.configuration.verbose = :really
-    uri = Gem::Uri.new(URI.parse("https://user:%7BDEScede%7Dpass@example.rubygems/specs.#{Gem.marshal_version}"))
+    uri = Gem::Uri.new(Gem::URI.parse("https://user:%7BDEScede%7Dpass@example.rubygems/specs.#{Gem.marshal_version}"))
 
-    conn = util_stub_net_http(:body => :junk, :code => 200) do |c|
+    conn = util_stub_net_http(body: :junk, code: 200) do |c|
       use_ui @ui do
-        @request = make_request(uri, Net::HTTP::Get, nil, nil)
+        @request = make_request(uri, Gem::Net::HTTP::Get, nil, nil)
         @request.fetch
       end
       c
     end
 
     auth_header = conn.payload["Authorization"]
-    assert_equal "Basic #{Base64.encode64("user:{DEScede}pass")}".strip, auth_header
+    assert_equal "Basic #{base64_encode64("user:{DEScede}pass")}".strip, auth_header
     assert_includes @ui.output, "GET https://user:REDACTED@example.rubygems/specs.#{Gem.marshal_version}"
   end
 
   def test_fetch_basic_oauth_encoded
     Gem.configuration.verbose = :really
-    uri = Gem::Uri.new(URI.parse("https://%7BDEScede%7Dpass:x-oauth-basic@example.rubygems/specs.#{Gem.marshal_version}"))
+    uri = Gem::Uri.new(Gem::URI.parse("https://%7BDEScede%7Dpass:x-oauth-basic@example.rubygems/specs.#{Gem.marshal_version}"))
 
-    conn = util_stub_net_http(:body => :junk, :code => 200) do |c|
+    conn = util_stub_net_http(body: :junk, code: 200) do |c|
       use_ui @ui do
-        @request = make_request(uri, Net::HTTP::Get, nil, nil)
+        @request = make_request(uri, Gem::Net::HTTP::Get, nil, nil)
         @request.fetch
       end
       c
     end
 
     auth_header = conn.payload["Authorization"]
-    assert_equal "Basic #{Base64.encode64("{DEScede}pass:x-oauth-basic")}".strip, auth_header
+    assert_equal "Basic #{base64_encode64("{DEScede}pass:x-oauth-basic")}".strip, auth_header
     assert_includes @ui.output, "GET https://REDACTED:x-oauth-basic@example.rubygems/specs.#{Gem.marshal_version}"
   end
 
   def test_fetch_head
-    uri = Gem::Uri.new(URI.parse("#{@gem_repo}/specs.#{Gem.marshal_version}"))
-    response = util_stub_net_http(:body => "", :code => 200) do |_conn|
-      @request = make_request(uri, Net::HTTP::Get, nil, nil)
+    uri = Gem::Uri.new(Gem::URI.parse("#{@gem_repo}/specs.#{Gem.marshal_version}"))
+    response = util_stub_net_http(body: "", code: 200) do |_conn|
+      @request = make_request(uri, Gem::Net::HTTP::Get, nil, nil)
       @request.fetch
     end
 
@@ -259,10 +264,10 @@ class TestGemRequest < Gem::TestCase
   end
 
   def test_fetch_unmodified
-    uri = Gem::Uri.new(URI.parse("#{@gem_repo}/specs.#{Gem.marshal_version}"))
+    uri = Gem::Uri.new(Gem::URI.parse("#{@gem_repo}/specs.#{Gem.marshal_version}"))
     t = Time.utc(2013, 1, 2, 3, 4, 5)
-    conn, response = util_stub_net_http(:body => "", :code => 304) do |c|
-      @request = make_request(uri, Net::HTTP::Get, t, nil)
+    conn, response = util_stub_net_http(body: "", code: 304) do |c|
+      @request = make_request(uri, Gem::Net::HTTP::Get, t, nil)
       [c, @request.fetch]
     end
 
